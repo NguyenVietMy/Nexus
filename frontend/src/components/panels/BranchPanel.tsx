@@ -6,6 +6,7 @@ import type { StrategicBranch } from "@/types";
 interface BranchPanelProps {
   repoId: string;
   branches: StrategicBranch[];
+  simulateError: string | null;
   onClose: () => void;
 }
 
@@ -228,7 +229,7 @@ function CompareView({ branches }: { branches: StrategicBranch[] }) {
   );
 }
 
-export function BranchPanel({ branches, onClose }: BranchPanelProps) {
+export function BranchPanel({ branches, simulateError, onClose }: BranchPanelProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("cards");
 
   return (
@@ -274,10 +275,19 @@ export function BranchPanel({ branches, onClose }: BranchPanelProps) {
       <div className="flex-1 overflow-y-auto p-4">
         {branches.length === 0 ? (
           <div className="text-center py-8">
-            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <p className="text-sm text-muted-foreground">
-              Generating strategic branches...
-            </p>
+            {simulateError ? (
+              <>
+                <p className="text-sm font-medium text-red-400">Simulation failed</p>
+                <p className="mt-2 text-xs text-muted-foreground">{simulateError}</p>
+              </>
+            ) : (
+              <>
+                <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <p className="text-sm text-muted-foreground">
+                  Generating strategic branches...
+                </p>
+              </>
+            )}
           </div>
         ) : viewMode === "compare" ? (
           <CompareView branches={branches} />

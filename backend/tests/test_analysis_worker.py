@@ -64,6 +64,7 @@ class TestRunAnalysis:
             patch("app.services.analysis_service.generate_repo_digest", new_callable=AsyncMock, return_value=fake_digest),
             patch("app.services.analysis_service.summarize_files", new_callable=AsyncMock, return_value=fake_summaries),
             patch("app.services.analysis_service.infer_features", new_callable=AsyncMock, return_value=fake_features),
+            patch("app.services.risk_service.compute_risk_scores", new_callable=AsyncMock, return_value=[]),
             patch("app.workers.analysis_worker.get_supabase", return_value=mock_supabase),
         ):
             await run_analysis(repo_id)

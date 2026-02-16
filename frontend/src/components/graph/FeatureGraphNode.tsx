@@ -23,8 +23,11 @@ function riskBadge(score: number | null) {
       : score <= 66
         ? "bg-amber-500/20 text-amber-400"
         : "bg-red-500/20 text-red-400";
+  const label =
+    score <= 33 ? "Low" : score <= 66 ? "Medium" : "High";
   return (
     <span
+      title={`Risk: ${score} (${label})`}
       className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${color}`}
     >
       {score}
