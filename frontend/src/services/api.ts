@@ -9,9 +9,36 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+const OPENAI_KEY_STORAGE = "pee_openai_key";
+
+export function getStoredApiKey(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(OPENAI_KEY_STORAGE) ?? "";
+}
+
+export function setStoredApiKey(key: string): void {
+  if (typeof window === "undefined") return;
+  if (key) {
+    localStorage.setItem(OPENAI_KEY_STORAGE, key);
+  } else {
+    localStorage.removeItem(OPENAI_KEY_STORAGE);
+  }
+}
+
+function buildHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const key = getStoredApiKey();
+  if (key) {
+    headers["X-OpenAI-Key"] = key;
+  }
+  return headers;
+}
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: buildHeaders(),
     ...init,
   });
   if (!res.ok) {

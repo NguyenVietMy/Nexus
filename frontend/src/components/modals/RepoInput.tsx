@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { analyzeRepo } from "@/services/api";
+import { useState, useEffect } from "react";
+import { analyzeRepo, getStoredApiKey, setStoredApiKey } from "@/services/api";
 import type { Repo } from "@/types";
 
 interface RepoInputProps {
@@ -10,12 +10,24 @@ interface RepoInputProps {
 
 export function RepoInput({ onRepoCreated }: RepoInputProps) {
   const [url, setUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setApiKey(getStoredApiKey());
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
+    if (!apiKey.trim()) {
+      setError("Please enter your OpenAI API key.");
+      return;
+    }
+
+    // Persist the key
+    setStoredApiKey(apiKey.trim());
 
     setLoading(true);
     setError(null);
@@ -46,17 +58,40 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://github.com/owner/repo"
-            className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            required
-          />
+          <div className="space-y-2 text-left">
+            <label className="text-xs font-medium text-muted-foreground">
+              OpenAI API Key
+            </label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-..."
+              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Your key is stored locally in your browser and sent directly to
+              OpenAI. It is never saved on our servers.
+            </p>
+          </div>
+
+          <div className="space-y-2 text-left">
+            <label className="text-xs font-medium text-muted-foreground">
+              GitHub Repository URL
+            </label>
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://github.com/owner/repo"
+              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              required
+            />
+          </div>
+
           <button
             type="submit"
-            disabled={loading || !url.trim()}
+            disabled={loading || !url.trim() || !apiKey.trim()}
             className="w-full rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "Starting Analysis..." : "Analyze Repository"}
