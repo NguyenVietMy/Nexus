@@ -1,12 +1,14 @@
 """Background workers for analysis and execution tasks."""
 
 import logging
+import shutil
+
 from app.db import get_supabase
 
 logger = logging.getLogger(__name__)
 
 
-async def run_analysis(repo_id: str) -> None:
+async def run_analysis(repo_id: str, openai_api_key: str | None = None) -> None:
     """Background task: run full repo analysis pipeline.
 
     Steps:
@@ -18,6 +20,7 @@ async def run_analysis(repo_id: str) -> None:
       6. Store everything in Supabase
     """
     db = get_supabase()
+    clone_path: str | None = None
 
     try:
         # Update status to analyzing
@@ -31,7 +34,6 @@ async def run_analysis(repo_id: str) -> None:
         )
         run_id = run.data[0]["id"]
 
-        # Phase 2 will fill in the actual analysis logic here
         from app.services.analysis_service import (
             generate_repo_digest,
             summarize_files,
@@ -59,23 +61,39 @@ async def run_analysis(repo_id: str) -> None:
 
         db.table("repos").update({"loc_count": loc}).eq("id", repo_id).execute()
 
-        # Steps 3-6: Analysis pipeline (Phase 2)
+        # Step 3: Generate digest
         digest = await generate_repo_digest(clone_path)
-        summaries = await summarize_files(clone_path, digest)
-        await infer_features(run_id, digest, summaries)
 
-        # Mark completed
+        # Store framework on repo record
+        if digest.get("framework"):
+            db.table("repos").update(
+                {"framework_detected": digest["framework"]}
+            ).eq("id", repo_id).execute()
+
+        # Step 4: Summarize key files via LLM
+        summaries = await summarize_files(clone_path, digest, api_key=openai_api_key)
+
+        # Step 5: Infer features via LLM and store in Supabase
+        await infer_features(run_id, digest, summaries, api_key=openai_api_key)
+
+        # Step 6: Mark completed
         db.table("analysis_runs").update(
             {"status": "completed", "digest_json": digest}
         ).eq("id", run_id).execute()
         db.table("repos").update({"status": "ready"}).eq("id", repo_id).execute()
 
-    except NotImplementedError:
-        logger.warning(f"Analysis for repo {repo_id} — service not yet implemented")
-        db.table("repos").update({"status": "error"}).eq("id", repo_id).execute()
+        logger.info(f"Analysis completed for repo {repo_id}")
+
     except Exception as e:
         logger.exception(f"Analysis failed for repo {repo_id}: {e}")
         db.table("repos").update({"status": "error"}).eq("id", repo_id).execute()
+    finally:
+        # Clean up cloned repo
+        if clone_path:
+            try:
+                shutil.rmtree(clone_path, ignore_errors=True)
+            except Exception:
+                pass
 
 
 async def run_execution(execution_run_id: str) -> None:
