@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.middleware.auth_middleware import AuthMiddleware
 from app.routers import repos, features, branches, execution
 
 
@@ -36,6 +37,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth middleware singleton (available for dependency injection in routers)
+auth_middleware = AuthMiddleware()
 
 # Register routers
 app.include_router(repos.router)

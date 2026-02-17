@@ -19,6 +19,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.db import get_supabase
+from app.middleware.auth_middleware import require_auth
 from app.services.github_service import (
     clone_repo,
     create_branch,

@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.db import get_supabase
+from app.middleware.auth_middleware import require_auth
 from app.services.llm_service import call_llm_structured_list
 
 # ---------------------------------------------------------------------------

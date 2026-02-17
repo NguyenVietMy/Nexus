@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     # GitHub
     github_token: str = ""
 
+    # JWT / Auth
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expiration_minutes: int = 60
+    jwt_issuer: str = ""
+
     # App
     sandbox_base_dir: str = "./sandboxes"
     max_loc: int = 100_000

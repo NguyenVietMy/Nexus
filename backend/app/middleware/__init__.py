@@ -1,4 +1,4 @@
-"""Service layer with authentication middleware integration."""
+"""Authentication middleware package."""
 
 from app.middleware.auth_middleware import AuthMiddleware, require_auth
 
