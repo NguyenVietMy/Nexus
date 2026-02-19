@@ -109,6 +109,49 @@ async def undo_available(repo_id: str):
     return {"can_undo": has_snapshots(repo_id)}
 
 
+@router.post("/{repo_id}/suggest-placement")
+async def suggest_placement(
+    repo_id: str,
+    body: dict,
+    openai_key: str | None = Depends(get_openai_key),
+):
+    """Return top candidate parent nodes for a new free-text feature description."""
+    from app.services.placement_service import suggest_placement as _suggest_placement
+
+    description = body.get("description", "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="description is required")
+
+    try:
+        candidates = await _suggest_placement(repo_id, description, api_key=openai_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"candidates": candidates}
+
+
+@router.post("/{repo_id}/create-suggestion")
+async def create_suggestion(
+    repo_id: str,
+    body: dict,
+    openai_key: str | None = Depends(get_openai_key),
+):
+    """Generate a full feature suggestion from a description and a chosen parent node."""
+    from app.services.placement_service import create_suggestion_for_node
+
+    parent_node_id = body.get("parent_node_id", "").strip()
+    description = body.get("description", "").strip()
+    if not parent_node_id or not description:
+        raise HTTPException(status_code=400, detail="parent_node_id and description are required")
+
+    try:
+        suggestion = await create_suggestion_for_node(parent_node_id, description, api_key=openai_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return suggestion
+
+
 @router.post("/{repo_id}/graph/fix")
 async def fix_graph(
     repo_id: str,
