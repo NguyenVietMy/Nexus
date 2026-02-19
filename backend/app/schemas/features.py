@@ -25,6 +25,11 @@ class FeatureGraphResponse(BaseModel):
     edges: list[FeatureEdgeResponse]
 
 
+class NodeUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
 class FeatureSuggestionResponse(BaseModel):
     id: str
     feature_node_id: str
