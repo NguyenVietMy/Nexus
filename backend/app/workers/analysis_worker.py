@@ -91,7 +91,14 @@ async def run_analysis(repo_id: str, openai_api_key: str | None = None) -> None:
         db.table("analysis_runs").update(
             {"status": "completed", "digest_json": digest}
         ).eq("id", run_id).execute()
-        db.table("repos").update({"status": "ready"}).eq("id", repo_id).execute()
+        from app.services.graph_cache import normalize_github_url, invalidate_graph_cache
+        repo_row = db.table("repos").select("github_url").eq("id", repo_id).execute()
+        normalized_url = normalize_github_url(repo_row.data[0]["github_url"]) if repo_row.data else None
+        update_payload = {"status": "ready"}
+        if normalized_url:
+            update_payload["normalized_github_url"] = normalized_url
+        db.table("repos").update(update_payload).eq("id", repo_id).execute()
+        invalidate_graph_cache(repo_id)
 
         logger.info(f"Analysis completed for repo {repo_id}")
 
@@ -107,16 +114,44 @@ async def run_analysis(repo_id: str, openai_api_key: str | None = None) -> None:
                 pass
 
 
-async def run_execution(
+async def run_plan_phase(
     execution_run_id: str, openai_api_key: str | None = None
 ) -> None:
-    """Background task: run autonomous feature build."""
+    """Background task: run plan generation phase (stops at awaiting_approval)."""
     try:
-        from app.services.execution_service import execute_build
+        from app.services.execution_service import execute_plan_phase
 
-        await execute_build(execution_run_id)
+        await execute_plan_phase(execution_run_id)
     except Exception as e:
-        logger.exception(f"Execution failed for run {execution_run_id}: {e}")
+        logger.exception(f"Plan phase failed for run {execution_run_id}: {e}")
+        db = get_supabase()
+        db.table("execution_runs").update(
+            {"status": "failed"}
+        ).eq("id", execution_run_id).execute()
+
+
+async def run_build_phase(execution_run_id: str) -> None:
+    """Background task: run build phase after user approval."""
+    try:
+        from app.services.execution_service import execute_build_phase
+
+        await execute_build_phase(execution_run_id)
+    except Exception as e:
+        logger.exception(f"Build phase failed for run {execution_run_id}: {e}")
+        db = get_supabase()
+        db.table("execution_runs").update(
+            {"status": "failed"}
+        ).eq("id", execution_run_id).execute()
+
+
+async def run_retry_build(execution_run_id: str) -> None:
+    """Background task: retry a failed build with error context."""
+    try:
+        from app.services.execution_service import retry_build_phase
+
+        await retry_build_phase(execution_run_id)
+    except Exception as e:
+        logger.exception(f"Retry failed for run {execution_run_id}: {e}")
         db = get_supabase()
         db.table("execution_runs").update(
             {"status": "failed"}

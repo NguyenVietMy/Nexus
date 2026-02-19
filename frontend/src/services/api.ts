@@ -103,6 +103,40 @@ export async function buildFeature(
   });
 }
 
+export async function approveExecution(
+  runId: string
+): Promise<ExecutionRun> {
+  return fetchJSON<ExecutionRun>(`/api/execution/${runId}/approve`, {
+    method: "POST",
+  });
+}
+
+export async function retryExecution(
+  runId: string
+): Promise<ExecutionRun> {
+  return fetchJSON<ExecutionRun>(`/api/execution/${runId}/retry`, {
+    method: "POST",
+  });
+}
+
+export async function updatePlan(
+  runId: string,
+  planMd: string
+): Promise<ExecutionRun> {
+  return fetchJSON<ExecutionRun>(`/api/execution/${runId}/plan`, {
+    method: "PUT",
+    body: JSON.stringify({ plan_md: planMd }),
+  });
+}
+
+export async function abandonExecution(
+  runId: string
+): Promise<ExecutionRun> {
+  return fetchJSON<ExecutionRun>(`/api/execution/${runId}/abandon`, {
+    method: "POST",
+  });
+}
+
 export async function getExecutionStatus(
   runId: string
 ): Promise<ExecutionRun> {

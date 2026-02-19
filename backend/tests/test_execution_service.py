@@ -17,6 +17,21 @@ def _make_exec_run(run_id="exec-1", repo_id="repo-1", suggestion_id="sugg-1"):
         "sandbox_path": None,
         "branch_name": None,
         "pr_url": None,
+        "plan_md": None,
+    }
+
+
+def _make_approved_exec_run(run_id="exec-1", repo_id="repo-1", suggestion_id="sugg-1"):
+    return {
+        "id": run_id,
+        "repo_id": repo_id,
+        "feature_suggestion_id": suggestion_id,
+        "status": "awaiting_approval",
+        "iteration_count": 0,
+        "sandbox_path": "/tmp/sandbox",
+        "branch_name": "pee/feature-oauth-integration-exec1234",
+        "pr_url": None,
+        "plan_md": "# Plan\nImplement OAuth",
     }
 
 
@@ -71,12 +86,12 @@ def _build_mock_supabase(exec_run, suggestion, repo):
     return mock
 
 
-class TestExecuteBuild:
-    """Test the full autonomous build orchestration."""
+class TestExecutePlanPhase:
+    """Test the plan generation phase."""
 
     @pytest.mark.asyncio
-    async def test_updates_status_through_stages(self):
-        from app.services.execution_service import execute_build
+    async def test_generates_plan_and_sets_awaiting_approval(self):
+        from app.services.execution_service import execute_plan_phase
 
         exec_run = _make_exec_run()
         suggestion = _make_suggestion()
@@ -86,88 +101,27 @@ class TestExecuteBuild:
         with (
             patch("app.services.execution_service.get_supabase", return_value=mock_db),
             patch("app.services.execution_service._clone_to_sandbox", new_callable=AsyncMock, return_value="/tmp/sandbox"),
+            patch("app.services.execution_service.create_branch"),
             patch("app.services.execution_service._generate_plan", new_callable=AsyncMock, return_value="# Plan\nImplement OAuth"),
             patch("app.services.execution_service._generate_test_file", new_callable=AsyncMock, return_value="test('should work', () => {})"),
-            patch("app.services.execution_service._invoke_claude_code", new_callable=AsyncMock, return_value=True),
-            patch("app.services.execution_service._run_verification", new_callable=AsyncMock, return_value=True),
-            patch("app.services.execution_service._commit_push_pr", new_callable=AsyncMock, return_value="https://github.com/owner/test-app/pull/1"),
-            patch("app.services.execution_service.shutil"),
+            patch("app.services.execution_service.Path") as mock_path,
         ):
-            await execute_build("exec-1")
+            mock_path.return_value.__truediv__ = MagicMock(return_value=MagicMock())
+            mock_path.return_value.__truediv__.return_value.parent.mkdir = MagicMock()
+            mock_path.return_value.__truediv__.return_value.write_text = MagicMock()
+            await execute_plan_phase("exec-1")
 
         # Should have called table operations for status updates
         assert mock_db.table.call_count > 0
 
     @pytest.mark.asyncio
-    async def test_retries_on_verification_failure(self):
-        from app.services.execution_service import execute_build
+    async def test_plan_phase_logs_steps(self):
+        from app.services.execution_service import execute_plan_phase
 
         exec_run = _make_exec_run()
         suggestion = _make_suggestion()
         repo = _make_repo()
         mock_db = _build_mock_supabase(exec_run, suggestion, repo)
-
-        with (
-            patch("app.services.execution_service.get_supabase", return_value=mock_db),
-            patch("app.services.execution_service.settings") as mock_settings,
-            patch("app.services.execution_service._clone_to_sandbox", new_callable=AsyncMock, return_value="/tmp/sandbox"),
-            patch("app.services.execution_service.create_branch"),
-            patch("app.services.execution_service._generate_plan", new_callable=AsyncMock, return_value="# Plan"),
-            patch("app.services.execution_service._generate_test_file", new_callable=AsyncMock, return_value="test()"),
-            patch("app.services.execution_service._invoke_claude_code", new_callable=AsyncMock, return_value=True) as mock_claude,
-            patch("app.services.execution_service._run_verification", new_callable=AsyncMock, side_effect=[False, True]) as mock_verify,
-            patch("app.services.execution_service._commit_push_pr", new_callable=AsyncMock, return_value="https://github.com/pr/1"),
-            patch("app.services.execution_service.shutil"),
-            patch("app.services.execution_service.Path") as mock_path,
-        ):
-            mock_settings.max_fix_iterations = 2
-            mock_settings.sandbox_base_dir = "./sandboxes"
-            mock_path.return_value.__truediv__ = MagicMock(return_value=MagicMock())
-            mock_path.return_value.__truediv__.return_value.parent.mkdir = MagicMock()
-            mock_path.return_value.__truediv__.return_value.write_text = MagicMock()
-            await execute_build("exec-1")
-
-        # Claude should be called twice (initial + 1 retry)
-        assert mock_claude.call_count == 2
-        assert mock_verify.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_fails_after_max_retries(self):
-        from app.services.execution_service import execute_build
-
-        exec_run = _make_exec_run()
-        suggestion = _make_suggestion()
-        repo = _make_repo()
-        mock_db = _build_mock_supabase(exec_run, suggestion, repo)
-
-        with (
-            patch("app.services.execution_service.get_supabase", return_value=mock_db),
-            patch("app.services.execution_service._clone_to_sandbox", new_callable=AsyncMock, return_value="/tmp/sandbox"),
-            patch("app.services.execution_service._generate_plan", new_callable=AsyncMock, return_value="# Plan"),
-            patch("app.services.execution_service._generate_test_file", new_callable=AsyncMock, return_value="test()"),
-            patch("app.services.execution_service._invoke_claude_code", new_callable=AsyncMock, return_value=True),
-            patch("app.services.execution_service._run_verification", new_callable=AsyncMock, return_value=False),
-            patch("app.services.execution_service.shutil"),
-            patch("app.services.execution_service.settings") as mock_settings,
-        ):
-            mock_settings.max_fix_iterations = 2
-            mock_settings.sandbox_base_dir = "./sandboxes"
-            await execute_build("exec-1")
-
-        # Should have been called 3 times (initial + 2 retries) then given up
-        # Status should end as "failed"
-        assert mock_db.table.call_count > 0
-
-    @pytest.mark.asyncio
-    async def test_logs_each_step(self):
-        from app.services.execution_service import execute_build
-
-        exec_run = _make_exec_run()
-        suggestion = _make_suggestion()
-        repo = _make_repo()
-        mock_db = _build_mock_supabase(exec_run, suggestion, repo)
-
-        log_calls = []
 
         with (
             patch("app.services.execution_service.get_supabase", return_value=mock_db),
@@ -176,23 +130,146 @@ class TestExecuteBuild:
             patch("app.services.execution_service.create_branch"),
             patch("app.services.execution_service._generate_plan", new_callable=AsyncMock, return_value="# Plan"),
             patch("app.services.execution_service._generate_test_file", new_callable=AsyncMock, return_value="test()"),
-            patch("app.services.execution_service._invoke_claude_code", new_callable=AsyncMock, return_value=True),
-            patch("app.services.execution_service._run_verification", new_callable=AsyncMock, return_value=True),
-            patch("app.services.execution_service._commit_push_pr", new_callable=AsyncMock, return_value="https://github.com/pr/1"),
-            patch("app.services.execution_service.shutil"),
             patch("app.services.execution_service.Path") as mock_path,
         ):
             mock_path.return_value.__truediv__ = MagicMock(return_value=MagicMock())
             mock_path.return_value.__truediv__.return_value.parent.mkdir = MagicMock()
             mock_path.return_value.__truediv__.return_value.write_text = MagicMock()
-            await execute_build("exec-1")
+            await execute_plan_phase("exec-1")
             log_calls = [c.args[1] for c in mock_log_fn.call_args_list]
 
-        # Should have logged clone, plan, tests, build, verify, push, done steps
-        assert len(log_calls) >= 5
         assert "clone" in log_calls
         assert "plan" in log_calls
-        assert "build" in log_calls
+        assert "tests" in log_calls
+
+
+class TestExecuteBuildPhase:
+    """Test the build phase after approval."""
+
+    @pytest.mark.asyncio
+    async def test_build_phase_runs_and_opens_pr(self):
+        from app.services.execution_service import execute_build_phase
+
+        exec_run = _make_approved_exec_run()
+        suggestion = _make_suggestion()
+        repo = _make_repo()
+        mock_db = _build_mock_supabase(exec_run, suggestion, repo)
+
+        with (
+            patch("app.services.execution_service.get_supabase", return_value=mock_db),
+            patch("app.services.execution_service._invoke_claude_code", new_callable=AsyncMock, return_value=True),
+            patch("app.services.execution_service._run_verification", new_callable=AsyncMock, return_value=True),
+            patch("app.services.execution_service._commit_push_pr", new_callable=AsyncMock, return_value="https://github.com/owner/test-app/pull/1"),
+            patch("app.services.execution_service.shutil"),
+            patch("app.services.execution_service.settings") as mock_settings,
+        ):
+            mock_settings.max_fix_iterations = 2
+            mock_settings.sandbox_base_dir = "./sandboxes"
+            await execute_build_phase("exec-1")
+
+        assert mock_db.table.call_count > 0
+
+    @pytest.mark.asyncio
+    async def test_retries_on_verification_failure(self):
+        from app.services.execution_service import execute_build_phase
+
+        exec_run = _make_approved_exec_run()
+        suggestion = _make_suggestion()
+        repo = _make_repo()
+        mock_db = _build_mock_supabase(exec_run, suggestion, repo)
+
+        with (
+            patch("app.services.execution_service.get_supabase", return_value=mock_db),
+            patch("app.services.execution_service.settings") as mock_settings,
+            patch("app.services.execution_service._invoke_claude_code", new_callable=AsyncMock, return_value=True) as mock_claude,
+            patch("app.services.execution_service._run_verification", new_callable=AsyncMock, side_effect=[False, True]) as mock_verify,
+            patch("app.services.execution_service._commit_push_pr", new_callable=AsyncMock, return_value="https://github.com/pr/1"),
+            patch("app.services.execution_service.shutil"),
+        ):
+            mock_settings.max_fix_iterations = 2
+            mock_settings.sandbox_base_dir = "./sandboxes"
+            await execute_build_phase("exec-1")
+
+        # Claude should be called twice (initial + 1 retry)
+        assert mock_claude.call_count == 2
+        assert mock_verify.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_fails_after_max_retries(self):
+        from app.services.execution_service import execute_build_phase
+
+        exec_run = _make_approved_exec_run()
+        suggestion = _make_suggestion()
+        repo = _make_repo()
+        mock_db = _build_mock_supabase(exec_run, suggestion, repo)
+
+        with (
+            patch("app.services.execution_service.get_supabase", return_value=mock_db),
+            patch("app.services.execution_service._invoke_claude_code", new_callable=AsyncMock, return_value=True),
+            patch("app.services.execution_service._run_verification", new_callable=AsyncMock, return_value=False),
+            patch("app.services.execution_service.shutil"),
+            patch("app.services.execution_service.settings") as mock_settings,
+        ):
+            mock_settings.max_fix_iterations = 2
+            mock_settings.sandbox_base_dir = "./sandboxes"
+            await execute_build_phase("exec-1")
+
+        # Should have been called 3 times (initial + 2 retries) then given up
+        assert mock_db.table.call_count > 0
+
+
+class TestParseStreamJsonLine:
+    """Test the stream-json parser."""
+
+    def test_parses_text_content(self):
+        from app.services.execution_service import _parse_stream_json_line
+
+        line = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": "I'll implement this feature."}]
+            }
+        })
+        result = _parse_stream_json_line(line)
+        assert result == "I'll implement this feature."
+
+    def test_parses_read_tool_use(self):
+        from app.services.execution_service import _parse_stream_json_line
+
+        line = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "src/app.ts"}}]
+            }
+        })
+        result = _parse_stream_json_line(line)
+        assert "[Reading]" in result
+        assert "src/app.ts" in result
+
+    def test_parses_bash_tool_use(self):
+        from app.services.execution_service import _parse_stream_json_line
+
+        line = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "npm test"}}]
+            }
+        })
+        result = _parse_stream_json_line(line)
+        assert "[Running]" in result
+        assert "npm test" in result
+
+    def test_skips_empty_lines(self):
+        from app.services.execution_service import _parse_stream_json_line
+
+        assert _parse_stream_json_line("") is None
+        assert _parse_stream_json_line("  ") is None
+
+    def test_skips_system_events(self):
+        from app.services.execution_service import _parse_stream_json_line
+
+        line = json.dumps({"type": "system", "subtype": "init"})
+        assert _parse_stream_json_line(line) is None
 
 
 class TestCloneToSandbox:
