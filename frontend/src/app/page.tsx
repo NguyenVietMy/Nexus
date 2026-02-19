@@ -31,6 +31,7 @@ export default function Home() {
   }, [repo?.id, repo?.status]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<FeatureSuggestion[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [branches, setBranches] = useState<StrategicBranch[]>([]);
   const [simulateError, setSimulateError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<
@@ -93,13 +94,16 @@ export default function Home() {
               repoId={repo.id}
               onNodeSelect={(nodeId) => {
                 setSelectedNodeId(nodeId);
-                setActivePanel("suggestions");
+                setActivePanel(null);
               }}
               onSimulate={() => {
                 setActivePanel("branches");
                 setSimulateError(null);
               }}
               setSuggestions={setSuggestions}
+              loadingSuggestions={loadingSuggestions}
+              setLoadingSuggestions={setLoadingSuggestions}
+              onSuggestionsLoaded={() => setActivePanel("suggestions")}
               setBranches={setBranches}
               setSimulateError={setSimulateError}
             />
@@ -113,6 +117,7 @@ export default function Home() {
               <SuggestionPanel
                 nodeId={selectedNodeId}
                 suggestions={suggestions}
+                loading={loadingSuggestions}
                 onClose={() => setActivePanel(null)}
               />
             )}

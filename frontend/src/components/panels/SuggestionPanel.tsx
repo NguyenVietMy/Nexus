@@ -8,6 +8,7 @@ import { ExecutionModal } from "@/components/modals/ExecutionModal";
 interface SuggestionPanelProps {
   nodeId: string;
   suggestions: FeatureSuggestion[];
+  loading?: boolean;
   onClose: () => void;
 }
 
@@ -20,6 +21,7 @@ const COMPLEXITY_STYLES: Record<string, string> = {
 export function SuggestionPanel({
   nodeId,
   suggestions,
+  loading = false,
   onClose,
 }: SuggestionPanelProps) {
   const [executionRunId, setExecutionRunId] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export function SuggestionPanel({
         <div>
           <h2 className="text-sm font-semibold">Feature Suggestions</h2>
           <p className="text-[11px] text-muted-foreground">
-            {suggestions.length} suggestion{suggestions.length !== 1 ? "s" : ""}
+            {loading ? "Loading..." : `${suggestions.length} suggestion${suggestions.length !== 1 ? "s" : ""}`}
           </p>
         </div>
         <button
@@ -68,7 +70,7 @@ export function SuggestionPanel({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {suggestions.length === 0 ? (
+        {loading ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             <p className="text-sm text-muted-foreground">
@@ -76,6 +78,12 @@ export function SuggestionPanel({
             </p>
             <p className="mt-1 text-[11px] text-muted-foreground">
               This may take a few seconds
+            </p>
+          </div>
+        ) : suggestions.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <p className="text-sm text-muted-foreground">
+              No suggestions for this feature
             </p>
           </div>
         ) : (
