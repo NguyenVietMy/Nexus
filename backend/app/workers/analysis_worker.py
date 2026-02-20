@@ -94,7 +94,7 @@ async def run_analysis(repo_id: str, openai_api_key: str | None = None) -> None:
         from app.services.graph_cache import normalize_github_url, invalidate_graph_cache
         repo_row = db.table("repos").select("github_url").eq("id", repo_id).execute()
         normalized_url = normalize_github_url(repo_row.data[0]["github_url"]) if repo_row.data else None
-        update_payload = {"status": "ready"}
+        update_payload = {"status": "ready", "active_analysis_run_id": run_id}
         if normalized_url:
             update_payload["normalized_github_url"] = normalized_url
         db.table("repos").update(update_payload).eq("id", repo_id).execute()
@@ -107,6 +107,116 @@ async def run_analysis(repo_id: str, openai_api_key: str | None = None) -> None:
         db.table("repos").update({"status": "error"}).eq("id", repo_id).execute()
     finally:
         # Clean up cloned repo
+        if clone_path:
+            try:
+                shutil.rmtree(clone_path, ignore_errors=True)
+            except Exception:
+                pass
+
+
+async def run_analysis_update(
+    repo_id: str, openai_api_key: str | None = None
+) -> None:
+    """Background task: re-run analysis with current graph context (Update Graph flow).
+
+    Creates a new analysis run. When done, sets it as pending_analysis_run_id
+    for user to preview and apply/revert.
+    """
+    db = get_supabase()
+    clone_path: str | None = None
+
+    try:
+        db.table("repos").update({"status": "updating"}).eq("id", repo_id).execute()
+
+        # Get current graph (active run or latest completed)
+        repo_row = db.table("repos").select("active_analysis_run_id").eq("id", repo_id).execute()
+        active_run_id = (
+            repo_row.data[0].get("active_analysis_run_id")
+            if repo_row.data else None
+        )
+        if not active_run_id:
+            run_result = (
+                db.table("analysis_runs")
+                .select("id")
+                .eq("repo_id", repo_id)
+                .eq("status", "completed")
+                .order("completed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if not run_result.data:
+                raise ValueError("No completed analysis run found to update from")
+            active_run_id = run_result.data[0]["id"]
+
+        nodes_result = (
+            db.table("feature_nodes")
+            .select("*")
+            .eq("analysis_run_id", active_run_id)
+            .execute()
+        )
+        current_nodes = nodes_result.data or []
+
+        # Create new analysis run
+        run = (
+            db.table("analysis_runs")
+            .insert({"repo_id": repo_id, "status": "running"})
+            .execute()
+        )
+        run_id = run.data[0]["id"]
+
+        from app.services.analysis_service import (
+            generate_repo_digest,
+            summarize_files,
+            infer_features_update,
+        )
+        from app.services.github_service import clone_repo, count_loc
+        from app.config import settings
+
+        repo = db.table("repos").select("*").eq("id", repo_id).execute()
+        github_url = repo.data[0]["github_url"]
+
+        clone_path = clone_repo(github_url)
+        loc = count_loc(clone_path)
+        if loc > settings.max_loc:
+            db.table("analysis_runs").update({"status": "failed"}).eq("id", run_id).execute()
+            db.table("repos").update({"status": "ready"}).eq("id", repo_id).execute()
+            logger.error(f"Repo {repo_id} exceeds LOC limit: {loc}")
+            return
+
+        digest = await generate_repo_digest(clone_path)
+        if digest.get("framework"):
+            db.table("repos").update(
+                {"framework_detected": digest["framework"]}
+            ).eq("id", repo_id).execute()
+
+        summaries = await summarize_files(clone_path, digest, api_key=openai_api_key)
+        await infer_features_update(
+            run_id, digest, summaries, current_nodes, api_key=openai_api_key
+        )
+
+        from app.services.risk_service import compute_risk_scores
+        await compute_risk_scores(
+            run_id, clone_path, digest, summaries, api_key=openai_api_key
+        )
+
+        db.table("analysis_runs").update(
+            {"status": "completed", "digest_json": digest}
+        ).eq("id", run_id).execute()
+
+        db.table("repos").update({
+            "status": "ready",
+            "pending_analysis_run_id": run_id,
+        }).eq("id", repo_id).execute()
+
+        from app.services.graph_cache import invalidate_graph_cache
+        invalidate_graph_cache(repo_id)
+
+        logger.info(f"Graph update completed for repo {repo_id}, run {run_id}")
+
+    except Exception as e:
+        logger.exception(f"Graph update failed for repo {repo_id}: {e}")
+        db.table("repos").update({"status": "ready"}).eq("id", repo_id).execute()
+    finally:
         if clone_path:
             try:
                 shutil.rmtree(clone_path, ignore_errors=True)

@@ -6,9 +6,10 @@ import { RepoInput } from "@/components/modals/RepoInput";
 import { FeatureGraphView } from "@/components/graph/FeatureGraphView";
 import { SuggestionPanel } from "@/components/panels/SuggestionPanel";
 import { AddFeatureFlow } from "@/components/modals/AddFeatureFlow";
+import { UpdateGraphPreviewModal } from "@/components/modals/UpdateGraphPreviewModal";
 import { PlanPanel } from "@/components/panels/PlanPanel";
-import { Network, ListChecks, Plus } from "lucide-react";
-import { getRepo } from "@/services/api";
+import { Network, ListChecks, Plus, RefreshCw } from "lucide-react";
+import { getRepo, startUpdateGraph } from "@/services/api";
 import type { Repo, FeatureSuggestion } from "@/types";
 
 type AppTab = "graph" | "plan";
@@ -17,9 +18,9 @@ export default function Home() {
   const [repo, setRepo] = useState<Repo | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("graph");
 
-  // Poll repo status while analysis is in progress
+  // Poll repo status while analysis or update is in progress
   useEffect(() => {
-    if (!repo || (repo.status !== "pending" && repo.status !== "analyzing")) {
+    if (!repo || (repo.status !== "pending" && repo.status !== "analyzing" && repo.status !== "updating")) {
       return;
     }
     const interval = setInterval(async () => {
@@ -28,9 +29,11 @@ export default function Home() {
         setRepo(updated);
         if (updated.status === "ready" || updated.status === "error") {
           clearInterval(interval);
+          setUpdatingGraph(false);
         }
       } catch {
         clearInterval(interval);
+        setUpdatingGraph(false);
       }
     }, 2000);
     return () => clearInterval(interval);
@@ -41,8 +44,43 @@ export default function Home() {
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showAddFeature, setShowAddFeature] = useState(false);
+  const [showUpdatePreview, setShowUpdatePreview] = useState(false);
+  const [updatingGraph, setUpdatingGraph] = useState(false);
+  const [graphRefreshKey, setGraphRefreshKey] = useState(0);
 
   const isReady = repo?.status === "ready";
+  const hasPendingUpdate = Boolean(repo?.pending_analysis_run_id);
+
+  // Show preview modal when pending update appears
+  useEffect(() => {
+    if (hasPendingUpdate && isReady) {
+      setShowUpdatePreview(true);
+    }
+  }, [hasPendingUpdate, isReady]);
+
+  async function handleStartUpdateGraph() {
+    if (!repo) return;
+    setUpdatingGraph(true);
+    try {
+      await startUpdateGraph(repo.id);
+      const updated = await getRepo(repo.id);
+      setRepo(updated);
+    } catch {
+      setUpdatingGraph(false);
+    }
+  }
+
+  function handleUpdateApplied() {
+    setShowUpdatePreview(false);
+    setGraphRefreshKey((k) => k + 1);
+    getRepo(repo!.id).then(setRepo);
+  }
+
+  function handleUpdateReverted() {
+    setShowUpdatePreview(false);
+    setGraphRefreshKey((k) => k + 1);
+    getRepo(repo!.id).then(setRepo);
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden relative">
@@ -76,14 +114,25 @@ export default function Home() {
               <span className="text-[10px] font-medium">Plan</span>
             </button>
             {activeTab === "graph" && (
-              <button
-                onClick={() => setShowAddFeature(true)}
-                className="flex flex-col items-center gap-0.5 py-2 px-2 rounded-r-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors mt-2"
-                title="Add feature"
-              >
-                <Plus className="size-5" />
-                <span className="text-[10px] font-medium">Add</span>
-              </button>
+              <>
+                <button
+                  onClick={() => setShowAddFeature(true)}
+                  className="flex flex-col items-center gap-0.5 py-2 px-2 rounded-r-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors mt-2"
+                  title="Add feature"
+                >
+                  <Plus className="size-5" />
+                  <span className="text-[10px] font-medium">Add</span>
+                </button>
+                <button
+                  onClick={handleStartUpdateGraph}
+                  disabled={updatingGraph || !!repo?.pending_analysis_run_id}
+                  className="flex flex-col items-center gap-0.5 py-2 px-2 rounded-r-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-50"
+                  title="Sync graph"
+                >
+                  <RefreshCw className={`size-5 ${updatingGraph ? "animate-spin" : ""}`} />
+                  <span className="text-[10px] font-medium">Sync</span>
+                </button>
+              </>
             )}
           </>
         )}
@@ -99,13 +148,19 @@ export default function Home() {
           <div className="flex flex-1 items-center justify-center">
             <div className="text-center">
               <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-              <p className="text-muted-foreground">Analyzing repository...</p>
+              <p className="text-muted-foreground">
+                {repo.status === "updating" ? "Updating graph..." : "Analyzing repository..."}
+              </p>
+              {repo.status === "updating" && (
+                <p className="mt-1 text-xs text-muted-foreground">Re-analyzing from GitHub</p>
+              )}
             </div>
           </div>
         ) : activeTab === "graph" ? (
           <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden flex-row">
             <main className="flex-1 min-w-0 relative overflow-hidden">
               <FeatureGraphView
+                key={graphRefreshKey}
                 repoId={repo.id}
                 onNodeSelect={(nodeId) => {
                   setSelectedNodeId(nodeId);
@@ -138,6 +193,14 @@ export default function Home() {
         <AddFeatureFlow
           repoId={repo.id}
           onClose={() => setShowAddFeature(false)}
+        />
+      )}
+
+      {showUpdatePreview && repo && (
+        <UpdateGraphPreviewModal
+          repoId={repo.id}
+          onApplied={handleUpdateApplied}
+          onReverted={handleUpdateReverted}
         />
       )}
     </div>

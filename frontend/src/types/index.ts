@@ -7,8 +7,10 @@ export interface Repo {
   default_branch: string | null;
   loc_count: number | null;
   framework_detected: string | null;
-  status: "pending" | "analyzing" | "ready" | "error";
+  status: "pending" | "analyzing" | "ready" | "error" | "updating";
   created_at: string;
+  active_analysis_run_id?: string | null;
+  pending_analysis_run_id?: string | null;
 }
 
 export interface AnalysisRun {

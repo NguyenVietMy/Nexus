@@ -14,8 +14,10 @@ class RepoResponse(BaseModel):
     default_branch: str | None = None
     loc_count: int | None = None
     framework_detected: str | None = None
-    status: str  # pending | analyzing | ready | error
+    status: str  # pending | analyzing | ready | error | updating
     created_at: datetime
+    active_analysis_run_id: str | None = None
+    pending_analysis_run_id: str | None = None
 
 
 class AnalysisRunResponse(BaseModel):
