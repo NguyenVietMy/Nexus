@@ -17,6 +17,8 @@ interface ExecutionModalProps {
   onClose: () => void;
 }
 
+type Tab = "plan" | "claude" | "pr";
+
 const PLAN_STEPS: { key: ExecutionStatus; label: string }[] = [
   { key: "queued", label: "Queued" },
   { key: "cloning", label: "Cloning repo" },
@@ -38,11 +40,7 @@ function getPhase(
   if (status === "done") return "done";
   if (status === "failed") return "failed";
   if (status === "awaiting_approval") return "approval";
-  if (
-    status === "building" ||
-    status === "verifying" ||
-    status === "pushing"
-  )
+  if (status === "building" || status === "verifying" || status === "pushing")
     return "building";
   return "planning";
 }
@@ -57,14 +55,12 @@ function StepIndicator({
   isFailed: boolean;
 }) {
   const currentIdx = steps.findIndex((s) => s.key === currentStatus);
-
   return (
     <div className="flex items-center gap-1">
       {steps.map((step, i) => {
         const isActive = i === currentIdx && !isFailed;
         const isCompleted = currentIdx > i || currentStatus === "done";
         const isFail = isFailed && i === currentIdx;
-
         return (
           <div key={step.key} className="flex items-center gap-1 flex-1">
             <div
@@ -78,7 +74,7 @@ function StepIndicator({
                       : "bg-muted text-muted-foreground"
               }`}
             >
-              {isCompleted ? "\u2713" : isFail ? "\u2717" : i + 1}
+              {isCompleted ? "✓" : isFail ? "✗" : i + 1}
             </div>
             {i < steps.length - 1 && (
               <div
@@ -97,6 +93,7 @@ function StepIndicator({
 export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
   const [run, setRun] = useState<ExecutionRun | null>(null);
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
+  const [activeTab, setActiveTab] = useState<Tab>("plan");
   const [approving, setApproving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [editingPlan, setEditingPlan] = useState(false);
@@ -107,6 +104,19 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
   const [markingMerged, setMarkingMerged] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef(true);
+  const prevPhaseRef = useRef<string>("");
+
+  // Auto-switch tabs on phase transitions (only on transition, not every render)
+  useEffect(() => {
+    if (!run) return;
+    const phase = getPhase(run.status);
+    if (phase === prevPhaseRef.current) return;
+    prevPhaseRef.current = phase;
+    if (phase === "approval") setActiveTab("plan");
+    else if (phase === "building") setActiveTab("claude");
+    else if (phase === "done") setActiveTab("pr");
+    else if (phase === "failed") setActiveTab("claude");
+  }, [run?.status]);
 
   // Poll for status and logs
   useEffect(() => {
@@ -121,9 +131,7 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
           if (!pollRef.current) break;
           setRun(status);
           setLogs(newLogs);
-          if (status.status === "done") break;
-          // Stop polling on failed — user needs to take action
-          if (status.status === "failed") break;
+          if (status.status === "done" || status.status === "failed") break;
           if (status.status === "awaiting_approval") {
             await new Promise((r) => setTimeout(r, 5000));
             continue;
@@ -140,12 +148,13 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
     };
   }, [runId]);
 
-  // Auto-scroll logs
+  // Auto-scroll claude log when on that tab
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+    if (activeTab === "claude") {
+      logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs, activeTab]);
 
-  // Restart polling (called after retry/approve triggers a new build)
   const restartPolling = useCallback(() => {
     pollRef.current = true;
     const poll = async () => {
@@ -158,11 +167,7 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
           if (!pollRef.current) break;
           setRun(status);
           setLogs(newLogs);
-          if (
-            status.status === "done" ||
-            status.status === "failed"
-          )
-            break;
+          if (status.status === "done" || status.status === "failed") break;
           if (status.status === "awaiting_approval") {
             await new Promise((r) => setTimeout(r, 5000));
             continue;
@@ -185,9 +190,7 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
       setRun(updated);
       restartPolling();
     } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Failed to approve"
-      );
+      setActionError(err instanceof Error ? err.message : "Failed to approve");
     } finally {
       setApproving(false);
     }
@@ -203,9 +206,7 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
       setRun(updated);
       restartPolling();
     } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Failed to retry"
-      );
+      setActionError(err instanceof Error ? err.message : "Failed to retry");
     } finally {
       setRetrying(false);
     }
@@ -217,7 +218,6 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
     try {
       await updatePlan(runId, editedPlan);
       setEditingPlan(false);
-      // Now retry with updated plan
       await retryExecution(runId);
       const updated = await getExecutionStatus(runId);
       setRun(updated);
@@ -238,9 +238,7 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
       await abandonExecution(runId);
       onClose();
     } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Failed to abandon"
-      );
+      setActionError(err instanceof Error ? err.message : "Failed to abandon");
     } finally {
       setAbandoning(false);
     }
@@ -253,7 +251,9 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
       const updated = await markPrMerged(runId);
       setRun(updated);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to mark as merged");
+      setActionError(
+        err instanceof Error ? err.message : "Failed to mark as merged"
+      );
     } finally {
       setMarkingMerged(false);
     }
@@ -268,23 +268,25 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
   const isFailed = phase === "failed";
   const isDone = phase === "done";
 
-  // Filter logs
   const claudeLogs = logs.filter((l) => l.step === "claude_code");
   const statusLogs = logs.filter((l) => l.step !== "claude_code");
+  const buildWasStarted = logs.some((l) => l.step === "build") ||
+    ["building", "verifying", "pushing", "done"].includes(run?.status ?? "");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="w-full max-w-3xl rounded-xl border border-border bg-card shadow-2xl max-h-[90vh] flex flex-col">
+
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
           <div>
             <h2 className="text-base font-semibold">
-              {phase === "approval"
-                ? "Review Implementation Plan"
-                : isDone
-                  ? "Build Complete"
-                  : isFailed
-                    ? "Build Failed"
+              {isDone
+                ? "Build Complete"
+                : isFailed
+                  ? "Build Failed"
+                  : phase === "approval"
+                    ? "Review Implementation Plan"
                     : phase === "building"
                       ? "Building Feature..."
                       : "Generating Plan..."}
@@ -334,359 +336,374 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
           )}
         </div>
 
-        {/* PR link */}
-        {run?.pr_url && (
-          <div className="border-b border-border px-6 py-3 bg-emerald-500/5 shrink-0">
-            <a
-              href={run.pr_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 text-sm text-emerald-400 hover:underline"
+        {/* Tabs */}
+        <div className="flex border-b border-border shrink-0">
+          {(
+            [
+              { id: "plan" as Tab, label: "Plan" },
+              { id: "claude" as Tab, label: "Claude Code" },
+              { id: "pr" as Tab, label: "Pull Request" },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`relative px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === tab.id
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
             >
-              <span className="font-medium">Pull Request opened</span>
-              <span className="text-xs text-muted-foreground truncate">
-                {run.pr_url}
-              </span>
-            </a>
-          </div>
-        )}
+              {tab.label}
+              {/* Green dot on PR tab once PR exists */}
+              {tab.id === "pr" && run?.pr_url && (
+                <span className="absolute top-2 right-2 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              )}
+              {/* Amber dot on Plan tab when awaiting approval */}
+              {tab.id === "plan" && phase === "approval" && (
+                <span className="absolute top-2 right-2 h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+              )}
+            </button>
+          ))}
+        </div>
 
-        {/* Main content area */}
+        {/* Tab content */}
         <div className="flex-1 overflow-y-auto min-h-0">
-          {/* Plan approval view */}
-          {phase === "approval" && run?.plan_md && (
+
+          {/* ── Plan tab ──────────────────────────────────────────────────── */}
+          {activeTab === "plan" && (
             <div className="p-6">
-              <div className="mb-4">
-                <h3 className="text-sm font-semibold mb-1">
-                  Implementation Plan
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Review the plan below. Approve to start building with Claude
-                  Code.
-                </p>
-              </div>
-              <div className="rounded-lg border border-border bg-background/50 p-4 max-h-80 overflow-y-auto">
-                <pre className="whitespace-pre-wrap text-sm text-foreground font-mono leading-relaxed">
-                  {run.plan_md}
-                </pre>
-              </div>
-              {actionError && (
-                <div className="mt-3 rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400">
-                  {actionError}
-                </div>
-              )}
-              <div className="mt-4 flex items-center gap-3">
-                <button
-                  onClick={handleApprove}
-                  disabled={approving}
-                  className="rounded-md bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
-                >
-                  {approving ? "Approving..." : "Approve & Build"}
-                </button>
-                <button
-                  onClick={onClose}
-                  disabled={approving}
-                  className="rounded-md bg-muted px-4 py-2 text-sm font-medium hover:bg-muted/80 transition-colors"
-                >
-                  Reject
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Planning phase: show status logs */}
-          {phase === "planning" && (
-            <div className="p-4 font-mono text-xs bg-background/50">
-              {statusLogs.length === 0 ? (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
-                  Starting...
-                </div>
-              ) : (
-                statusLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    className={`py-0.5 leading-relaxed ${
-                      log.log_level === "error"
-                        ? "text-red-400"
-                        : log.log_level === "warn"
-                          ? "text-amber-400"
-                          : "text-muted-foreground"
-                    }`}
-                  >
-                    <span className="text-zinc-600 select-none">
-                      [{log.step}]
-                    </span>{" "}
-                    {log.message}
-                  </div>
-                ))
-              )}
-              <div ref={logEndRef} />
-            </div>
-          )}
-
-          {/* Build phase: show Claude output */}
-          {phase === "building" && (
-            <div className="p-4 font-mono text-xs bg-background/50">
-              {statusLogs
-                .filter((l) =>
-                  ["build", "verify", "push"].includes(l.step)
-                )
-                .map((log) => (
-                  <div
-                    key={log.id}
-                    className={`py-0.5 leading-relaxed ${
-                      log.log_level === "error"
-                        ? "text-red-400"
-                        : log.log_level === "warn"
-                          ? "text-amber-400"
-                          : "text-muted-foreground"
-                    }`}
-                  >
-                    <span className="text-zinc-600 select-none">
-                      [{log.step}]
-                    </span>{" "}
-                    {log.message}
-                  </div>
-                ))}
-
-              {claudeLogs.length > 0 && (
-                <div className="mt-2 border-t border-border/50 pt-2">
-                  <div className="text-[10px] text-zinc-500 mb-1 uppercase tracking-wider">
-                    Claude Code Output
-                  </div>
-                  {claudeLogs.map((log) => (
-                    <div
-                      key={log.id}
-                      className={`py-0.5 leading-relaxed ${
-                        log.message.startsWith("[Reading]") ||
-                        log.message.startsWith("[Writing]") ||
-                        log.message.startsWith("[Editing]")
-                          ? "text-blue-400"
-                          : log.message.startsWith("[Running]")
-                            ? "text-amber-400"
-                            : log.message.startsWith("  ->")
-                              ? "text-zinc-500"
-                              : log.message.startsWith("[Result]")
-                                ? "text-emerald-400"
-                                : log.log_level === "error"
-                                  ? "text-red-400"
-                                  : log.log_level === "warn"
-                                    ? "text-amber-400"
-                                    : "text-foreground/80"
-                      }`}
-                    >
-                      {log.message}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {claudeLogs.length === 0 && (
-                <div className="flex items-center gap-2 text-muted-foreground mt-2">
-                  <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
-                  Waiting for Claude Code output...
-                </div>
-              )}
-              <div ref={logEndRef} />
-            </div>
-          )}
-
-          {/* Done: show logs summary + merge action */}
-          {isDone && (
-            <div className="p-4 space-y-4">
-              <div className="font-mono text-xs bg-background/50">
-                {statusLogs
-                  .filter((l) =>
-                    ["build", "verify", "push", "done"].includes(l.step)
-                  )
-                  .map((log) => (
-                    <div
-                      key={log.id}
-                      className={`py-0.5 leading-relaxed ${
-                        log.log_level === "error"
-                          ? "text-red-400"
-                          : log.log_level === "warn"
-                            ? "text-amber-400"
-                            : "text-muted-foreground"
-                      }`}
-                    >
-                      <span className="text-zinc-600 select-none">
-                        [{log.step}]
-                      </span>{" "}
-                      {log.message}
-                    </div>
-                  ))}
-                <div ref={logEndRef} />
-              </div>
-
-              {/* Mark as merged */}
-              {run?.pr_url && (
-                <div className="rounded-lg border border-border p-4 space-y-2">
-                  <p className="text-sm font-medium">After merging the PR</p>
-                  <p className="text-xs text-muted-foreground">
-                    Once you merge the PR on GitHub, mark it here to add the built feature as a node in the graph.
+              {!run?.plan_md ? (
+                /* Plan still generating */
+                <div className="flex flex-col items-center justify-center py-10 gap-3">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <p className="text-sm text-muted-foreground">
+                    Generating implementation plan...
                   </p>
-                  {run.pr_merged ? (
-                    <div className="flex items-center gap-2 text-xs text-emerald-400">
-                      <span>✓</span>
-                      <span>Feature added to graph</span>
+                  {statusLogs.length > 0 && (
+                    <div className="w-full mt-2 font-mono text-xs bg-background/50 rounded-lg border border-border p-3 max-h-40 overflow-y-auto">
+                      {statusLogs.map((log) => (
+                        <div
+                          key={log.id}
+                          className={`py-0.5 leading-relaxed ${
+                            log.log_level === "error"
+                              ? "text-red-400"
+                              : log.log_level === "warn"
+                                ? "text-amber-400"
+                                : "text-muted-foreground"
+                          }`}
+                        >
+                          <span className="text-zinc-600 select-none">
+                            [{log.step}]
+                          </span>{" "}
+                          {log.message}
+                        </div>
+                      ))}
                     </div>
-                  ) : (
-                    <>
-                      <button
-                        onClick={handleMarkMerged}
-                        disabled={markingMerged}
-                        className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
-                      >
-                        {markingMerged ? "Adding to graph…" : "Mark PR as Merged"}
-                      </button>
-                      {actionError && (
-                        <p className="text-xs text-red-400">{actionError}</p>
-                      )}
-                    </>
                   )}
                 </div>
+              ) : (
+                <>
+                  {/* Status badge */}
+                  <div className="mb-4 flex items-center gap-2">
+                    <h3 className="text-sm font-semibold">Implementation Plan</h3>
+                    {phase === "approval" ? (
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                        Awaiting approval
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                        Approved
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Plan content */}
+                  {isFailed && editingPlan ? (
+                    <textarea
+                      value={editedPlan}
+                      onChange={(e) => setEditedPlan(e.target.value)}
+                      className="w-full h-72 rounded-lg border border-border bg-background p-3 font-mono text-sm text-foreground resize-y focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  ) : (
+                    <div className="rounded-lg border border-border bg-background/50 p-4 max-h-80 overflow-y-auto">
+                      <pre className="whitespace-pre-wrap text-sm text-foreground font-mono leading-relaxed">
+                        {run.plan_md}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Approve actions (approval phase only) */}
+                  {phase === "approval" && (
+                    <>
+                      {actionError && (
+                        <div className="mt-3 rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400">
+                          {actionError}
+                        </div>
+                      )}
+                      <div className="mt-4 flex items-center gap-3">
+                        <button
+                          onClick={handleApprove}
+                          disabled={approving}
+                          className="rounded-md bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                        >
+                          {approving ? "Approving..." : "Approve & Build"}
+                        </button>
+                        <button
+                          onClick={onClose}
+                          disabled={approving}
+                          className="rounded-md bg-muted px-4 py-2 text-sm font-medium hover:bg-muted/80 transition-colors"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Edit plan actions (failed phase only) */}
+                  {isFailed && (
+                    <div className="mt-4 flex items-center gap-3">
+                      {editingPlan ? (
+                        <>
+                          <button
+                            onClick={handleSavePlanAndRetry}
+                            disabled={savingPlan || !editedPlan.trim()}
+                            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                          >
+                            {savingPlan ? "Saving & retrying..." : "Save & Retry"}
+                          </button>
+                          <button
+                            onClick={() => setEditingPlan(false)}
+                            disabled={savingPlan}
+                            className="rounded-md bg-muted px-4 py-2 text-sm font-medium hover:bg-muted/80 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          {actionError && (
+                            <span className="text-xs text-red-400">
+                              {actionError}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          onClick={handleStartEditPlan}
+                          className="rounded-md bg-muted px-4 py-2 text-sm font-medium hover:bg-muted/80 transition-colors"
+                        >
+                          Edit Plan
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
 
-          {/* Failed: show error logs + retry options */}
-          {isFailed && (
-            <div className="p-4">
-              {/* Error logs */}
-              <div className="mb-4 font-mono text-xs bg-background/50 rounded-lg border border-red-500/20 p-3 max-h-40 overflow-y-auto">
-                {logs
-                  .filter(
-                    (l) =>
-                      l.log_level === "error" || l.log_level === "warn"
-                  )
-                  .slice(-10)
-                  .map((log) => (
-                    <div
-                      key={log.id}
-                      className={`py-0.5 leading-relaxed ${
-                        log.log_level === "error"
-                          ? "text-red-400"
-                          : "text-amber-400"
-                      }`}
-                    >
-                      <span className="text-zinc-600 select-none">
-                        [{log.step}]
-                      </span>{" "}
-                      {log.message}
-                    </div>
-                  ))}
-                {logs.filter(
-                  (l) =>
-                    l.log_level === "error" || l.log_level === "warn"
-                ).length === 0 && (
-                  <div className="text-red-400">
-                    Build failed. No detailed error logs available.
-                  </div>
-                )}
-              </div>
-
-              {/* Edit plan view */}
-              {editingPlan ? (
-                <div className="mb-4">
-                  <div className="mb-2">
-                    <h3 className="text-sm font-semibold">Edit Plan</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Modify the plan below, then save and retry.
-                    </p>
-                  </div>
-                  <textarea
-                    value={editedPlan}
-                    onChange={(e) => setEditedPlan(e.target.value)}
-                    className="w-full h-64 rounded-lg border border-border bg-background p-3 font-mono text-sm text-foreground resize-y focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <div className="mt-3 flex items-center gap-3">
-                    <button
-                      onClick={handleSavePlanAndRetry}
-                      disabled={savingPlan || !editedPlan.trim()}
-                      className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
-                    >
-                      {savingPlan ? "Saving & retrying..." : "Save & Retry"}
-                    </button>
-                    <button
-                      onClick={() => setEditingPlan(false)}
-                      disabled={savingPlan}
-                      className="rounded-md bg-muted px-4 py-2 text-sm font-medium hover:bg-muted/80 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+          {/* ── Claude Code tab ───────────────────────────────────────────── */}
+          {activeTab === "claude" && (
+            <div className="p-4 font-mono text-xs bg-background/50 min-h-32">
+              {!buildWasStarted ? (
+                <div className="flex items-center justify-center py-12 text-muted-foreground text-sm font-sans">
+                  Build hasn&apos;t started yet — approve the plan to begin.
                 </div>
               ) : (
-                /* Retry action buttons */
-                <div>
-                  <h3 className="text-sm font-semibold mb-2">
-                    What would you like to do?
-                  </h3>
-                  <div className="flex flex-col gap-2">
-                    <button
-                      onClick={handleRetry}
-                      disabled={retrying || abandoning}
-                      className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors disabled:opacity-50"
-                    >
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-sm">
-                        R
+                <>
+                  {/* Status logs from build/verify/push/tests */}
+                  {statusLogs
+                    .filter((l) =>
+                      ["build", "verify", "push", "tests", "done", "error"].includes(
+                        l.step
+                      )
+                    )
+                    .map((log) => (
+                      <div
+                        key={log.id}
+                        className={`py-0.5 leading-relaxed ${
+                          log.log_level === "error"
+                            ? "text-red-400"
+                            : log.log_level === "warn"
+                              ? "text-amber-400"
+                              : "text-muted-foreground"
+                        }`}
+                      >
+                        <span className="text-zinc-600 select-none">
+                          [{log.step}]
+                        </span>{" "}
+                        {log.message}
                       </div>
-                      <div>
-                        <div className="text-sm font-medium">
-                          {retrying ? "Retrying..." : "Retry as-is"}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Re-run Claude Code with the error context from the
-                          previous attempt
-                        </div>
-                      </div>
-                    </button>
+                    ))}
 
-                    <button
-                      onClick={handleStartEditPlan}
-                      disabled={retrying || abandoning}
-                      className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors disabled:opacity-50"
-                    >
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-400 text-sm">
-                        E
+                  {/* Claude Code output */}
+                  {claudeLogs.length > 0 && (
+                    <div className="mt-2 border-t border-border/50 pt-2">
+                      <div className="text-[10px] text-zinc-500 mb-1 uppercase tracking-wider">
+                        Claude Code Output
                       </div>
-                      <div>
-                        <div className="text-sm font-medium">
-                          Edit plan & retry
+                      {claudeLogs.map((log) => (
+                        <div
+                          key={log.id}
+                          className={`py-0.5 leading-relaxed ${
+                            log.message.startsWith("[Reading]") ||
+                            log.message.startsWith("[Writing]") ||
+                            log.message.startsWith("[Editing]")
+                              ? "text-blue-400"
+                              : log.message.startsWith("[Running]")
+                                ? "text-amber-400"
+                                : log.message.startsWith("  ->")
+                                  ? "text-zinc-500"
+                                  : log.message.startsWith("[Result]")
+                                    ? "text-emerald-400"
+                                    : log.log_level === "error"
+                                      ? "text-red-400"
+                                      : log.log_level === "warn"
+                                        ? "text-amber-400"
+                                        : "text-foreground/80"
+                          }`}
+                        >
+                          {log.message}
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          Modify the implementation plan before retrying the
-                          build
-                        </div>
-                      </div>
-                    </button>
+                      ))}
+                    </div>
+                  )}
 
-                    <button
-                      onClick={handleAbandon}
-                      disabled={retrying || abandoning}
-                      className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors disabled:opacity-50"
-                    >
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-400 text-sm">
-                        X
+                  {claudeLogs.length === 0 && !isFailed && (
+                    <div className="flex items-center gap-2 text-muted-foreground mt-2">
+                      <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
+                      Waiting for Claude Code output...
+                    </div>
+                  )}
+
+                  {/* Failed: retry options */}
+                  {isFailed && (
+                    <div className="mt-4 border-t border-border pt-4">
+                      <h3 className="text-sm font-semibold font-sans mb-2">
+                        What would you like to do?
+                      </h3>
+                      <div className="flex flex-col gap-2">
+                        <button
+                          onClick={handleRetry}
+                          disabled={retrying || abandoning}
+                          className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors disabled:opacity-50 font-sans"
+                        >
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-sm">
+                            R
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium">
+                              {retrying ? "Retrying..." : "Retry as-is"}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Re-run Claude Code with error context from the
+                              previous attempt
+                            </div>
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            handleStartEditPlan();
+                            setActiveTab("plan");
+                          }}
+                          disabled={retrying || abandoning}
+                          className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors disabled:opacity-50 font-sans"
+                        >
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-400 text-sm">
+                            E
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium">
+                              Edit plan & retry
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Modify the implementation plan before retrying —
+                              opens Plan tab
+                            </div>
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={handleAbandon}
+                          disabled={retrying || abandoning}
+                          className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors disabled:opacity-50 font-sans"
+                        >
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-400 text-sm">
+                            X
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium">
+                              {abandoning ? "Cleaning up..." : "Abandon"}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Clean up the sandbox and close
+                            </div>
+                          </div>
+                        </button>
                       </div>
-                      <div>
-                        <div className="text-sm font-medium">
-                          {abandoning ? "Cleaning up..." : "Abandon"}
+
+                      {actionError && (
+                        <div className="mt-3 rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400 font-sans">
+                          {actionError}
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          Clean up the sandbox and close
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div ref={logEndRef} />
+                </>
               )}
+            </div>
+          )}
 
-              {actionError && (
-                <div className="mt-3 rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400">
-                  {actionError}
+          {/* ── Pull Request tab ──────────────────────────────────────────── */}
+          {activeTab === "pr" && (
+            <div className="p-6">
+              {!run?.pr_url ? (
+                <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
+                  No pull request created yet.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
+                    <p className="text-sm font-medium text-emerald-400 mb-1">
+                      Pull Request Opened
+                    </p>
+                    <a
+                      href={run.pr_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-muted-foreground hover:text-foreground hover:underline break-all"
+                    >
+                      {run.pr_url}
+                    </a>
+                  </div>
+
+                  <div className="rounded-lg border border-border p-4 space-y-3">
+                    <p className="text-sm font-medium">After merging the PR</p>
+                    <p className="text-xs text-muted-foreground">
+                      Once you merge the PR on GitHub, mark it here to add the
+                      built feature as a node in the graph.
+                    </p>
+                    {run.pr_merged ? (
+                      <div className="flex items-center gap-2 text-xs text-emerald-400">
+                        <span>✓</span>
+                        <span>Feature added to graph</span>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={handleMarkMerged}
+                          disabled={markingMerged}
+                          className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                        >
+                          {markingMerged ? "Adding to graph…" : "Mark PR as Merged"}
+                        </button>
+                        {actionError && (
+                          <p className="text-xs text-red-400">{actionError}</p>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -697,7 +714,7 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
         <div className="flex items-center justify-between border-t border-border px-6 py-3 shrink-0">
           <div className="text-xs text-muted-foreground">
             {isDone && "Feature built and PR opened successfully."}
-            {isFailed && "Build failed. Choose an action above."}
+            {isFailed && "Build failed — choose an action in the Claude Code tab."}
             {phase === "approval" && "Review the plan and approve to continue."}
             {phase === "planning" && "Generating implementation plan..."}
             {phase === "building" &&
