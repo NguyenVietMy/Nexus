@@ -12,6 +12,7 @@ export default function Home() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<FeatureSuggestion[]>([]);
   const [branches, setBranches] = useState<StrategicBranch[]>([]);
+  const [simulateError, setSimulateError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<
     "suggestions" | "branches" | null
   >(null);
@@ -74,9 +75,13 @@ export default function Home() {
                 setSelectedNodeId(nodeId);
                 setActivePanel("suggestions");
               }}
-              onSimulate={() => setActivePanel("branches")}
+              onSimulate={() => {
+                setActivePanel("branches");
+                setSimulateError(null);
+              }}
               setSuggestions={setSuggestions}
               setBranches={setBranches}
+              setSimulateError={setSimulateError}
             />
           )}
         </main>
@@ -95,6 +100,7 @@ export default function Home() {
               <BranchPanel
                 repoId={repo.id}
                 branches={branches}
+                simulateError={simulateError}
                 onClose={() => setActivePanel(null)}
               />
             )}

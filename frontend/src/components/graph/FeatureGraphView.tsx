@@ -37,6 +37,7 @@ interface FeatureGraphViewProps {
   onSimulate: () => void;
   setSuggestions: (s: FeatureSuggestion[]) => void;
   setBranches: (b: StrategicBranch[]) => void;
+  setSimulateError: (e: string | null) => void;
 }
 
 // -----------------------------------------------------------------------
@@ -160,12 +161,14 @@ export function FeatureGraphView({
   onSimulate,
   setSuggestions,
   setBranches,
+  setSimulateError,
 }: FeatureGraphViewProps) {
   const [rawFeatures, setRawFeatures] = useState<FeatureNode[]>([]);
   const [rawEdges, setRawEdges] = useState<FeatureEdge[]>([]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [loading, setLoading] = useState(true);
+  const [graphError, setGraphError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
@@ -185,6 +188,7 @@ export function FeatureGraphView({
   // Fetch graph data on mount
   useEffect(() => {
     async function load() {
+      setGraphError(null);
       try {
         const graph = await getFeatureGraph(repoId);
         setRawFeatures(graph.nodes);
@@ -205,8 +209,10 @@ export function FeatureGraphView({
           if (count > 5) initialCollapsed.add(id);
         }
         setCollapsedNodes(initialCollapsed);
-      } catch {
-        // Empty graph
+      } catch (err) {
+        setGraphError(err instanceof Error ? err.message : "Failed to load graph");
+        setRawFeatures([]);
+        setRawEdges([]);
       } finally {
         setLoading(false);
       }
@@ -247,13 +253,15 @@ export function FeatureGraphView({
 
   const handleSimulate = useCallback(async () => {
     onSimulate();
+    setSimulateError(null);
     try {
       const branches = await simulateFutures(repoId);
       setBranches(branches);
-    } catch {
+    } catch (err) {
+      setSimulateError(err instanceof Error ? err.message : "Failed to simulate");
       setBranches([]);
     }
-  }, [repoId, onSimulate, setBranches]);
+  }, [repoId, onSimulate, setBranches, setSimulateError]);
 
   if (loading) {
     return (
@@ -269,11 +277,20 @@ export function FeatureGraphView({
   if (rawFeatures.length === 0) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="text-center space-y-2">
-          <p className="text-muted-foreground">No features detected yet.</p>
-          <p className="text-xs text-muted-foreground">
-            The analysis may still be running, or the repo may be empty.
-          </p>
+        <div className="text-center space-y-2 max-w-sm">
+          {graphError ? (
+            <>
+              <p className="text-red-400 font-medium">Failed to load graph</p>
+              <p className="text-xs text-muted-foreground">{graphError}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-muted-foreground">No features detected yet.</p>
+              <p className="text-xs text-muted-foreground">
+                The analysis may still be running, or the repo may be empty.
+              </p>
+            </>
+          )}
         </div>
       </div>
     );
