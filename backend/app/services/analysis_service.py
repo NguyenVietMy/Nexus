@@ -234,11 +234,14 @@ async def _call_llm_for_features(
         "- name (string): concise feature name\n"
         "- description (string): 1-2 sentence explanation\n"
         "- anchor_files (list[string]): relative file paths most related to this feature\n"
-        "- parent_feature (string|null): name of parent feature if this is a sub-feature\n"
-        "- related_features (list[string]): names of related features\n\n"
+        "- parent_feature (string|null): name of parent feature if this is a sub-feature. "
+        "Each feature has at most ONE parent. Use only for hierarchy.\n"
+        "- related_features (list[string]): names of related features (for context only; not used for graph)\n\n"
         "Generate as many features as the codebase warrants. "
-        "Organize them hierarchically where appropriate. "
-        "Top-level features should have parent_feature = null."
+        "Organize them in a strict TREE: every node (except roots) has exactly one parent. "
+        "No lateral connections between siblings. No cross-branch links. "
+        "Top-level features should have parent_feature = null. "
+        "There can be 2, 3, or many roots."
     )
 
     user_content = (
@@ -298,55 +301,66 @@ async def infer_features(
         name_to_id[row["name"]] = row["id"]
         all_nodes.append(row)
 
+    # Sanitize parent: break cycles and self-references (proper tree)
+    def _would_create_cycle(child_name: str, parent_name: str) -> bool:
+        seen = {child_name}
+        cur = parent_name
+        while cur and cur in name_to_id:
+            if cur in seen:
+                return True
+            seen.add(cur)
+            parent_of_cur = next(
+                (f["parent_feature"] for f in raw_features if f["name"] == cur),
+                None,
+            )
+            cur = parent_of_cur
+        return False
+
+    sanitized_parent: dict[str, str | None] = {}
+    for f in raw_features:
+        name = f["name"]
+        parent = f.get("parent_feature")
+        if not parent or parent not in name_to_id or parent == name:
+            sanitized_parent[name] = None
+        elif _would_create_cycle(name, parent):
+            sanitized_parent[name] = None
+        else:
+            sanitized_parent[name] = parent
+
     # Second pass: set parent_feature_id where applicable
     for f in raw_features:
-        if f["parent_feature"] and f["parent_feature"] in name_to_id:
+        parent_name = sanitized_parent.get(f["name"])
+        if parent_name and parent_name in name_to_id:
             child_id = name_to_id.get(f["name"])
-            parent_id = name_to_id[f["parent_feature"]]
+            parent_id = name_to_id[parent_name]
             if child_id:
                 db.table("feature_nodes").update(
                     {"parent_feature_id": parent_id}
                 ).eq("id", child_id).execute()
 
-    # --- Insert edges ---
+    # --- Insert tree edges only (parent -> child, no related/lateral) ---
     edges_to_insert: list[dict] = []
+    seen_edges: set[tuple[str, str]] = set()
 
     for f in raw_features:
         node_id = name_to_id.get(f["name"])
         if not node_id:
             continue
-
-        # Tree edge to parent
-        if f["parent_feature"] and f["parent_feature"] in name_to_id:
-            parent_id = name_to_id[f["parent_feature"]]
-            edges_to_insert.append({
-                "source_node_id": parent_id,
-                "target_node_id": node_id,
-                "edge_type": "tree",
-            })
-
-        # Related edges
-        for related_name in f.get("related_features", []):
-            related_id = name_to_id.get(related_name)
-            if related_id and related_id != node_id:
+        parent_name = sanitized_parent.get(f["name"])
+        if parent_name and parent_name in name_to_id:
+            parent_id = name_to_id[parent_name]
+            key = (parent_id, node_id)
+            if key not in seen_edges:
+                seen_edges.add(key)
                 edges_to_insert.append({
-                    "source_node_id": node_id,
-                    "target_node_id": related_id,
-                    "edge_type": "related",
+                    "source_node_id": parent_id,
+                    "target_node_id": node_id,
+                    "edge_type": "tree",
                 })
 
     all_edges: list[dict] = []
     if edges_to_insert:
-        # Deduplicate edges
-        seen = set()
-        unique_edges = []
-        for e in edges_to_insert:
-            key = (e["source_node_id"], e["target_node_id"], e["edge_type"])
-            if key not in seen:
-                seen.add(key)
-                unique_edges.append(e)
-
-        edge_result = db.table("feature_edges").insert(unique_edges).execute()
+        edge_result = db.table("feature_edges").insert(edges_to_insert).execute()
         all_edges = edge_result.data
 
     return {"nodes": all_nodes, "edges": all_edges}

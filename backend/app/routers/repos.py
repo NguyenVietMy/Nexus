@@ -107,6 +107,6 @@ async def get_features(repo_id: str):
     )
 
     nodes_data = nodes_result.data or []
-    edges_data = edges_result.data or []
+    edges_data = [e for e in (edges_result.data or []) if e.get("edge_type") == "tree"]
     set_cached_graph(repo_id, nodes_data, edges_data)
     return {"nodes": nodes_data, "edges": edges_data}

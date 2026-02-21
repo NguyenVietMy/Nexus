@@ -36,6 +36,9 @@ interface FeatureGraphViewProps {
   onNodeSelect: (nodeId: string) => void;
   onSimulate: () => void;
   setSuggestions: (s: FeatureSuggestion[]) => void;
+  loadingSuggestions: boolean;
+  setLoadingSuggestions: (loading: boolean) => void;
+  onSuggestionsLoaded?: () => void;
   setBranches: (b: StrategicBranch[]) => void;
   setSimulateError: (e: string | null) => void;
 }
@@ -56,17 +59,11 @@ function buildLayout(
   selectedNodeId: string | null,
   onToggleCollapse: (id: string) => void
 ): LayoutResult {
-  // Build parent -> children map from tree edges
-  const childMap = new Map<string, FeatureNode[]>();
-  const hasTreeParent = new Set<string>();
-
-  for (const e of featureEdges) {
-    if (e.edge_type === "tree") {
-      hasTreeParent.add(e.target_node_id);
-    }
-  }
+  // Use only tree edges (parent -> child); ignore related/lateral edges
+  const treeEdges = featureEdges.filter((e) => e.edge_type === "tree");
 
   const featureById = new Map<string, FeatureNode>();
+  const childMap = new Map<string, FeatureNode[]>();
   for (const f of features) {
     featureById.set(f.id, f);
   }
@@ -129,10 +126,10 @@ function buildLayout(
     layoutNode(root, 0);
   }
 
-  // Build edges (hide edges to collapsed children)
+  // Build edges from tree edges only (hide edges to collapsed children)
   const visibleNodeIds = new Set(nodes.map((n) => n.id));
 
-  const edges: Edge[] = featureEdges
+  const edges: Edge[] = treeEdges
     .filter(
       (e) => visibleNodeIds.has(e.source_node_id) && visibleNodeIds.has(e.target_node_id)
     )
@@ -140,12 +137,8 @@ function buildLayout(
       id: e.id,
       source: e.source_node_id,
       target: e.target_node_id,
-      type: e.edge_type === "related" ? "default" : "smoothstep",
-      animated: e.edge_type === "related",
-      style: {
-        stroke: e.edge_type === "related" ? "#6d28d9" : "#3f3f46",
-        strokeWidth: e.edge_type === "related" ? 1 : 1.5,
-      },
+      type: "smoothstep",
+      style: { stroke: "#3f3f46", strokeWidth: 1.5 },
     }));
 
   return { nodes, edges };
@@ -160,6 +153,9 @@ export function FeatureGraphView({
   onNodeSelect,
   onSimulate,
   setSuggestions,
+  loadingSuggestions,
+  setLoadingSuggestions,
+  onSuggestionsLoaded,
   setBranches,
   setSimulateError,
 }: FeatureGraphViewProps) {
@@ -171,7 +167,6 @@ export function FeatureGraphView({
   const [graphError, setGraphError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   const handleToggleCollapse = useCallback((nodeId: string) => {
     setCollapsedNodes((prev) => {
@@ -238,6 +233,7 @@ export function FeatureGraphView({
     async (_: React.MouseEvent, node: Node) => {
       setSelectedNodeId(node.id);
       onNodeSelect(node.id);
+      setSuggestions([]);
       setLoadingSuggestions(true);
       try {
         const suggestions = await getSuggestions(node.id);
@@ -246,9 +242,10 @@ export function FeatureGraphView({
         setSuggestions([]);
       } finally {
         setLoadingSuggestions(false);
+        onSuggestionsLoaded?.();
       }
     },
-    [onNodeSelect, setSuggestions]
+    [onNodeSelect, setSuggestions, setLoadingSuggestions, onSuggestionsLoaded]
   );
 
   const handleSimulate = useCallback(async () => {
@@ -354,10 +351,10 @@ export function FeatureGraphView({
         </button>
       </div>
 
-      {/* Loading suggestions indicator */}
+      {/* Notification when generating (panel closed) */}
       {loadingSuggestions && (
-        <div className="absolute top-4 right-4 flex items-center gap-2 rounded-lg bg-card/90 backdrop-blur-sm border border-border px-3 py-2 text-xs text-muted-foreground">
-          <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
+        <div className="absolute top-4 right-4 flex items-center gap-3 rounded-xl bg-card/90 backdrop-blur-sm border border-border px-5 py-3 text-sm text-muted-foreground">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           Generating suggestions...
         </div>
       )}

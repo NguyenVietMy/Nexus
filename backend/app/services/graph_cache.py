@@ -8,8 +8,8 @@ from typing import Any
 
 # In-memory cache: repo_id -> (payload, expires_at)
 _graph_cache: dict[str, tuple[dict[str, Any], float]] = {}
-# Default TTL seconds for cached graph
-CACHE_TTL_SECONDS = 300
+# Default TTL seconds for cached graph (30 minutes)
+CACHE_TTL_SECONDS = 1800
 
 
 def normalize_github_url(url: str) -> str:
