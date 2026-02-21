@@ -6,6 +6,9 @@ import re
 import time
 from typing import Any
 
+from cachetools.keys import hashkey
+from backend.app.db import cache
+
 # In-memory cache: repo_id -> (payload, expires_at)
 _graph_cache: dict[str, tuple[dict[str, Any], float]] = {}
 # Default TTL seconds for cached graph (30 minutes)
@@ -56,3 +59,22 @@ def set_cached_graph(repo_id: str, nodes: list[Any], edges: list[Any]) -> None:
 def invalidate_graph_cache(repo_id: str) -> None:
     """Remove cached graph for repo_id (e.g. after re-analysis)."""
     _graph_cache.pop(repo_id, None)
+
+
+def invalidate_cache_entry(key):
+    actual_key = hashkey(*key) if isinstance(key, tuple) else key
+    if actual_key in cache:
+        del cache[actual_key]
+
+
+def fetch_new_data_for_key(key):
+    from backend.app.db import get_frequently_accessed_data
+    return get_frequently_accessed_data.__wrapped__(*key)
+
+
+def refresh_cache():
+    # Logic to refresh cache entries
+    # Iterate over keys and refresh data
+    for key in list(cache.keys()):
+        # Refresh logic, possibly involving re-fetching data
+        cache[key] = fetch_new_data_for_key(key)
