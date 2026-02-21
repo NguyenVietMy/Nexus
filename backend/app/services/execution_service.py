@@ -113,7 +113,9 @@ def _slugify_pascal(slug: str) -> str:
 def _test_file_ref(language: str, feature_slug: str) -> str:
     """Return the relative test file path for the given language and feature slug."""
     if language == "python":
-        return f"tests/test_{feature_slug}.py"
+        # Python module names can't have hyphens — convert to underscores
+        py_slug = feature_slug.replace("-", "_")
+        return f"tests/test_{py_slug}.py"
     if language == "java":
         return f"src/test/java/Test{_slugify_pascal(feature_slug)}.java"
     return f"__tests__/{feature_slug}.test.ts"
