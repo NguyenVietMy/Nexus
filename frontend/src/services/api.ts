@@ -94,6 +94,27 @@ export async function canUndo(repoId: string): Promise<boolean> {
   return res.can_undo;
 }
 
+export async function suggestPlacement(
+  repoId: string,
+  description: string
+): Promise<{ candidates: { node_id: string; node_name: string; rationale: string }[] }> {
+  return fetchJSON(`/api/repos/${repoId}/suggest-placement`, {
+    method: "POST",
+    body: JSON.stringify({ description }),
+  });
+}
+
+export async function createSuggestion(
+  repoId: string,
+  parentNodeId: string,
+  description: string
+): Promise<FeatureSuggestion> {
+  return fetchJSON<FeatureSuggestion>(`/api/repos/${repoId}/create-suggestion`, {
+    method: "POST",
+    body: JSON.stringify({ parent_node_id: parentNodeId, description }),
+  });
+}
+
 export async function fixGraph(
   repoId: string,
   message: string

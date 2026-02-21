@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { RepoInput } from "@/components/modals/RepoInput";
 import { FeatureGraphView } from "@/components/graph/FeatureGraphView";
 import { SuggestionPanel } from "@/components/panels/SuggestionPanel";
+import { AddFeatureFlow } from "@/components/modals/AddFeatureFlow";
 import { getRepo } from "@/services/api";
 import type { Repo, FeatureSuggestion } from "@/types";
 
@@ -36,6 +37,7 @@ export default function Home() {
   const [suggestions, setSuggestions] = useState<FeatureSuggestion[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showAddFeature, setShowAddFeature] = useState(false);
 
   const isReady = repo?.status === "ready";
 
@@ -76,6 +78,15 @@ export default function Home() {
               Plan
             </button>
           </div>
+        )}
+
+        {isReady && activeTab === "graph" && (
+          <button
+            onClick={() => setShowAddFeature(true)}
+            className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          >
+            + Add feature
+          </button>
         )}
 
         {repo && (
@@ -146,6 +157,13 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {showAddFeature && repo && (
+        <AddFeatureFlow
+          repoId={repo.id}
+          onClose={() => setShowAddFeature(false)}
+        />
+      )}
     </div>
   );
 }
