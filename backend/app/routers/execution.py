@@ -1,6 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from app.schemas.execution import (
     BuildRequest,
+    UpdatePlanRequest,
     ExecutionRunResponse,
     ExecutionLogResponse,
 )
@@ -19,7 +20,7 @@ async def build_feature(
     background_tasks: BackgroundTasks,
     openai_key: str | None = Depends(get_openai_key),
 ):
-    """Trigger autonomous feature implementation via Claude Code."""
+    """Trigger plan generation phase. Plan is shown to user for approval before building."""
     db = get_supabase()
 
     # Validate the suggestion exists
@@ -65,14 +66,108 @@ async def build_feature(
     )
     execution_run = exec_result.data[0]
 
-    # Kick off background execution
-    from app.workers.analysis_worker import run_execution
+    # Kick off plan phase only (not the full build)
+    from app.workers.analysis_worker import run_plan_phase
 
     background_tasks.add_task(
-        run_execution, execution_run["id"], openai_api_key=openai_key
+        run_plan_phase, execution_run["id"], openai_api_key=openai_key
     )
 
     return execution_run
+
+
+@router.post("/execution/{run_id}/approve", response_model=ExecutionRunResponse)
+async def approve_execution(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+):
+    """Approve the generated plan and start the Claude Code build phase."""
+    db = get_supabase()
+    result = db.table("execution_runs").select("*").eq("id", run_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Execution run not found")
+
+    run = result.data[0]
+    if run["status"] != "awaiting_approval":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot approve run in status '{run['status']}'. Expected 'awaiting_approval'.",
+        )
+
+    # Kick off build phase
+    from app.workers.analysis_worker import run_build_phase
+
+    background_tasks.add_task(run_build_phase, run_id)
+
+    # Return the current run (status will update in background)
+    return run
+
+
+@router.post("/execution/{run_id}/retry", response_model=ExecutionRunResponse)
+async def retry_execution(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+):
+    """Retry a failed build with error context from previous attempt."""
+    db = get_supabase()
+    result = db.table("execution_runs").select("*").eq("id", run_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Execution run not found")
+
+    run = result.data[0]
+    if run["status"] != "failed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot retry run in status '{run['status']}'. Expected 'failed'.",
+        )
+
+    from app.workers.analysis_worker import run_retry_build
+
+    background_tasks.add_task(run_retry_build, run_id)
+
+    return run
+
+
+@router.put("/execution/{run_id}/plan", response_model=ExecutionRunResponse)
+async def update_plan(
+    run_id: str,
+    body: UpdatePlanRequest,
+):
+    """Update the plan text for a failed execution before retrying."""
+    db = get_supabase()
+    result = db.table("execution_runs").select("*").eq("id", run_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Execution run not found")
+
+    run = result.data[0]
+    if run["status"] not in ("failed", "awaiting_approval"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot edit plan in status '{run['status']}'. Expected 'failed' or 'awaiting_approval'.",
+        )
+
+    db.table("execution_runs").update(
+        {"plan_md": body.plan_md}
+    ).eq("id", run_id).execute()
+
+    updated = db.table("execution_runs").select("*").eq("id", run_id).execute().data[0]
+    return updated
+
+
+@router.post("/execution/{run_id}/abandon", response_model=ExecutionRunResponse)
+async def abandon_execution_route(run_id: str):
+    """Abandon a failed execution and clean up its sandbox."""
+    db = get_supabase()
+    result = db.table("execution_runs").select("*").eq("id", run_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Execution run not found")
+
+    from app.services.execution_service import abandon_execution
+
+    await abandon_execution(run_id)
+
+    updated = db.table("execution_runs").select("*").eq("id", run_id).execute().data[0]
+    return updated
 
 
 @router.get("/execution/{run_id}", response_model=ExecutionRunResponse)

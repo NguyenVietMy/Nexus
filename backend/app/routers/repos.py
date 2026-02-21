@@ -3,6 +3,11 @@ from app.schemas.repos import AnalyzeRepoRequest, RepoResponse, AnalysisRunRespo
 from app.schemas.features import FeatureGraphResponse
 from app.db import get_supabase
 from app.dependencies import get_openai_key
+from app.services.graph_cache import (
+    normalize_github_url,
+    get_cached_graph,
+    set_cached_graph,
+)
 
 router = APIRouter(prefix="/api/repos", tags=["repos"])
 
@@ -13,8 +18,23 @@ async def analyze_repo(
     background_tasks: BackgroundTasks,
     openai_key: str | None = Depends(get_openai_key),
 ):
-    """Start asynchronous repo analysis."""
+    """Start asynchronous repo analysis. Reuses existing repo if same URL already analyzed."""
     db = get_supabase()
+    normalized_url = normalize_github_url(body.github_url)
+
+    # If we already have a ready repo for this URL, return it (graph cache by URL)
+    if normalized_url:
+        existing = (
+            db.table("repos")
+            .select("*")
+            .eq("normalized_github_url", normalized_url)
+            .eq("status", "ready")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return existing.data[0]
 
     # Insert repo record with 'pending' status
     result = (
@@ -22,6 +42,7 @@ async def analyze_repo(
         .insert(
             {
                 "github_url": body.github_url,
+                "normalized_github_url": normalized_url or normalize_github_url(body.github_url),
                 "name": body.github_url.rstrip("/").split("/")[-1],
                 "status": "pending",
             }
@@ -50,7 +71,11 @@ async def get_repo(repo_id: str):
 
 @router.get("/{repo_id}/features", response_model=FeatureGraphResponse)
 async def get_features(repo_id: str):
-    """Get full feature graph (nodes + edges) for a repo."""
+    """Get full feature graph (nodes + edges) for a repo. Uses in-memory cache when available."""
+    cached = get_cached_graph(repo_id)
+    if cached is not None:
+        return cached
+
     db = get_supabase()
 
     # Get the latest analysis run for this repo
@@ -81,4 +106,7 @@ async def get_features(repo_id: str):
         .execute()
     )
 
-    return {"nodes": nodes_result.data, "edges": edges_result.data}
+    nodes_data = nodes_result.data or []
+    edges_data = edges_result.data or []
+    set_cached_graph(repo_id, nodes_data, edges_data)
+    return {"nodes": nodes_data, "edges": edges_data}

@@ -79,6 +79,7 @@ export type ExecutionStatus =
   | "cloning"
   | "planning"
   | "testing"
+  | "awaiting_approval"
   | "building"
   | "verifying"
   | "pushing"
@@ -93,6 +94,7 @@ export interface ExecutionRun {
   sandbox_path: string | null;
   branch_name: string | null;
   pr_url: string | null;
+  plan_md: string | null;
   iteration_count: number;
   started_at: string | null;
   completed_at: string | null;
