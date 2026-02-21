@@ -215,19 +215,29 @@ export function FeatureGraphView({
     load();
   }, [repoId]);
 
-  // Recompute layout when features, collapse state, or selection changes
+  // Recompute layout when features or collapse state changes (not selection - preserves user positions)
   useEffect(() => {
     if (rawFeatures.length === 0) return;
     const result = buildLayout(
       rawFeatures,
       rawEdges,
       collapsedNodes,
-      selectedNodeId,
+      null,
       handleToggleCollapse
     );
     setNodes(result.nodes);
     setEdges(result.edges);
-  }, [rawFeatures, rawEdges, collapsedNodes, selectedNodeId, handleToggleCollapse, setNodes, setEdges]);
+  }, [rawFeatures, rawEdges, collapsedNodes, handleToggleCollapse, setNodes, setEdges]);
+
+  // Update selection state only when selectedNodeId changes (avoids full layout reset)
+  useEffect(() => {
+    setNodes((nodes) =>
+      nodes.map((n) => ({
+        ...n,
+        data: { ...n.data, selected: n.id === selectedNodeId },
+      }))
+    );
+  }, [selectedNodeId, setNodes]);
 
   const handleNodeClick = useCallback(
     async (_: React.MouseEvent, node: Node) => {
