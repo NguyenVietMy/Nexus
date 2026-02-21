@@ -42,10 +42,10 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
   };
 
   return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="w-full max-w-lg space-y-8 text-center">
-        <div>
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
+    <div className="flex flex-1 min-h-0 w-full items-center justify-center p-8">
+      <div className="mx-auto w-full max-w-lg space-y-8">
+        <div className="flex flex-col items-center text-center">
+          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
             <span className="text-2xl font-bold text-primary">PE</span>
           </div>
           <h2 className="text-2xl font-bold tracking-tight">
@@ -57,9 +57,9 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2 text-left">
-            <label className="text-xs font-medium text-muted-foreground">
+        <form onSubmit={handleSubmit} className="flex w-full flex-col space-y-4">
+          <div className="space-y-2">
+            <label className="block text-xs font-medium text-muted-foreground">
               OpenAI API Key
             </label>
             <input
@@ -75,8 +75,8 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
             </p>
           </div>
 
-          <div className="space-y-2 text-left">
-            <label className="text-xs font-medium text-muted-foreground">
+          <div className="space-y-2">
+            <label className="block text-xs font-medium text-muted-foreground">
               GitHub Repository URL
             </label>
             <input
@@ -104,7 +104,7 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
           </p>
         )}
 
-        <div className="text-xs text-muted-foreground">
+        <div className="text-center text-xs text-muted-foreground">
           Supports TypeScript/Node projects up to 100k LOC
         </div>
       </div>

@@ -353,6 +353,7 @@ async def infer_features(
             if key not in seen_edges:
                 seen_edges.add(key)
                 edges_to_insert.append({
+                    "analysis_run_id": run_id,
                     "source_node_id": parent_id,
                     "target_node_id": node_id,
                     "edge_type": "tree",
