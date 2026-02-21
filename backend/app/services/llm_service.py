@@ -3,15 +3,15 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 from app.config import settings
 
-_client: AsyncOpenAI | None = None
 
-
-def get_openai() -> AsyncOpenAI:
-    """Return a singleton async OpenAI client."""
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(api_key=settings.openai_api_key)
-    return _client
+def _make_client(api_key: str | None = None) -> AsyncOpenAI:
+    """Create an AsyncOpenAI client with the given key, or fall back to env."""
+    key = api_key or settings.openai_api_key
+    if not key:
+        raise ValueError(
+            "No OpenAI API key provided. Pass your key via the X-OpenAI-Key header."
+        )
+    return AsyncOpenAI(api_key=key)
 
 
 async def call_llm_structured(
@@ -19,12 +19,13 @@ async def call_llm_structured(
     user_prompt: str,
     response_model: type[BaseModel],
     max_retries: int = 2,
+    api_key: str | None = None,
 ) -> BaseModel:
     """Call OpenAI with JSON mode and validate against a Pydantic model.
 
     Retries up to max_retries times on malformed output.
     """
-    client = get_openai()
+    client = _make_client(api_key)
 
     for attempt in range(max_retries + 1):
         response = await client.chat.completions.create(
@@ -46,7 +47,6 @@ async def call_llm_structured(
                 raise ValueError(
                     f"LLM returned invalid output after {max_retries + 1} attempts: {e}"
                 ) from e
-            # Retry with a nudge
             continue
 
     raise ValueError("Unreachable: LLM retry loop exited without returning")
@@ -58,12 +58,13 @@ async def call_llm_structured_list(
     item_model: type[BaseModel],
     list_key: str = "items",
     max_retries: int = 2,
+    api_key: str | None = None,
 ) -> list:
     """Call OpenAI expecting a JSON object with a list under `list_key`.
 
     Each item is validated against item_model.
     """
-    client = get_openai()
+    client = _make_client(api_key)
 
     for attempt in range(max_retries + 1):
         response = await client.chat.completions.create(

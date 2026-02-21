@@ -1,13 +1,18 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from app.schemas.repos import AnalyzeRepoRequest, RepoResponse, AnalysisRunResponse
 from app.schemas.features import FeatureGraphResponse
 from app.db import get_supabase
+from app.dependencies import get_openai_key
 
 router = APIRouter(prefix="/api/repos", tags=["repos"])
 
 
 @router.post("/analyze", response_model=RepoResponse)
-async def analyze_repo(body: AnalyzeRepoRequest, background_tasks: BackgroundTasks):
+async def analyze_repo(
+    body: AnalyzeRepoRequest,
+    background_tasks: BackgroundTasks,
+    openai_key: str | None = Depends(get_openai_key),
+):
     """Start asynchronous repo analysis."""
     db = get_supabase()
 
@@ -25,10 +30,10 @@ async def analyze_repo(body: AnalyzeRepoRequest, background_tasks: BackgroundTas
     )
     repo = result.data[0]
 
-    # Kick off background analysis
+    # Kick off background analysis, passing the user's API key
     from app.workers.analysis_worker import run_analysis
 
-    background_tasks.add_task(run_analysis, repo["id"])
+    background_tasks.add_task(run_analysis, repo["id"], openai_api_key=openai_key)
 
     return repo
 
