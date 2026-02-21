@@ -74,6 +74,17 @@ export async function getSuggestions(
   );
 }
 
+export async function updateFeatureNode(
+  nodeId: string,
+  name: string,
+  description: string
+): Promise<void> {
+  await fetchJSON(`/api/features/${nodeId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name, description }),
+  });
+}
+
 // ---- Execution ----
 
 export async function buildFeature(

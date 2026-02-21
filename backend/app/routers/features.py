@@ -1,9 +1,58 @@
 from fastapi import APIRouter, Depends, HTTPException
-from app.schemas.features import FeatureSuggestionResponse
+from app.schemas.features import FeatureSuggestionResponse, FeatureNodeResponse, NodeUpdateRequest
 from app.db import get_supabase
 from app.dependencies import get_openai_key
 
 router = APIRouter(prefix="/api/features", tags=["features"])
+
+
+def _get_repo_id_for_node(db, node: dict) -> str | None:
+    run_result = (
+        db.table("analysis_runs")
+        .select("repo_id")
+        .eq("id", node["analysis_run_id"])
+        .execute()
+    )
+    return run_result.data[0]["repo_id"] if run_result.data else None
+
+
+@router.patch("/{node_id}", response_model=FeatureNodeResponse)
+async def update_node(node_id: str, body: NodeUpdateRequest):
+    """Update a feature node's name and/or description."""
+    from app.services.graph_version_service import save_snapshot
+    from app.services.graph_cache import invalidate_graph_cache
+
+    db = get_supabase()
+
+    node_result = db.table("feature_nodes").select("*").eq("id", node_id).execute()
+    if not node_result.data:
+        raise HTTPException(status_code=404, detail="Node not found")
+    node = node_result.data[0]
+
+    updates: dict = {}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.description is not None:
+        updates["description"] = body.description
+    if not updates:
+        return node
+
+    repo_id = _get_repo_id_for_node(db, node)
+
+    # Save snapshot before mutating
+    if repo_id:
+        save_snapshot(repo_id, node["analysis_run_id"])
+
+    updated = db.table("feature_nodes").update(updates).eq("id", node_id).execute()
+
+    # Delete stale suggestions so they regenerate on next click
+    db.table("feature_suggestions").delete().eq("feature_node_id", node_id).execute()
+
+    # Invalidate graph cache
+    if repo_id:
+        invalidate_graph_cache(repo_id)
+
+    return updated.data[0]
 
 
 @router.get("/{node_id}/suggestions", response_model=list[FeatureSuggestionResponse])

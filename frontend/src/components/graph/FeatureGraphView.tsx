@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -11,7 +11,7 @@ import {
   type Node,
   type Edge,
 } from "@xyflow/react";
-import { getFeatureGraph, getSuggestions } from "@/services/api";
+import { getFeatureGraph, getSuggestions, updateFeatureNode } from "@/services/api";
 import { FeatureGraphNode } from "./FeatureGraphNode";
 import type { FeatureNode, FeatureEdge, FeatureSuggestion } from "@/types";
 
@@ -45,7 +45,8 @@ function buildLayout(
   featureEdges: FeatureEdge[],
   collapsedSet: Set<string>,
   selectedNodeId: string | null,
-  onToggleCollapse: (id: string) => void
+  onToggleCollapse: (id: string) => void,
+  onEdit: (nodeId: string, name: string, description: string) => Promise<void>
 ): LayoutResult {
   // Use only tree edges (parent -> child); ignore related/lateral edges
   const treeEdges = featureEdges.filter((e) => e.edge_type === "tree");
@@ -98,6 +99,7 @@ function buildLayout(
         collapsed: isCollapsed,
         selected: feature.id === selectedNodeId,
         onToggleCollapse,
+        onEdit,
       },
     });
 
@@ -165,6 +167,31 @@ export function FeatureGraphView({
     });
   }, []);
 
+  const handleEdit = useCallback(
+    async (nodeId: string, name: string, description: string) => {
+      await updateFeatureNode(nodeId, name, description);
+      // Update local features state so graph re-renders immediately
+      setRawFeatures((prev) =>
+        prev.map((f) => (f.id === nodeId ? { ...f, name, description } : f))
+      );
+      // If this node is selected, refresh suggestions
+      if (selectedNodeId === nodeId) {
+        setSuggestions([]);
+        setLoadingSuggestions(true);
+        try {
+          const suggestions = await getSuggestions(nodeId);
+          setSuggestions(suggestions);
+        } catch {
+          setSuggestions([]);
+        } finally {
+          setLoadingSuggestions(false);
+          onSuggestionsLoaded?.();
+        }
+      }
+    },
+    [selectedNodeId, setSuggestions, setLoadingSuggestions, onSuggestionsLoaded]
+  );
+
   // Fetch graph data on mount
   useEffect(() => {
     async function load() {
@@ -208,11 +235,12 @@ export function FeatureGraphView({
       rawEdges,
       collapsedNodes,
       null,
-      handleToggleCollapse
+      handleToggleCollapse,
+      handleEdit
     );
     setNodes(result.nodes);
     setEdges(result.edges);
-  }, [rawFeatures, rawEdges, collapsedNodes, handleToggleCollapse, setNodes, setEdges]);
+  }, [rawFeatures, rawEdges, collapsedNodes, handleToggleCollapse, handleEdit, setNodes, setEdges]);
 
   // Update selection state only when selectedNodeId changes (avoids full layout reset)
   useEffect(() => {
