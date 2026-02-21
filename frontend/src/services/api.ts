@@ -115,14 +115,32 @@ export async function createSuggestion(
   });
 }
 
-export async function fixGraph(
-  repoId: string,
-  message: string
-): Promise<{ explanation: string; nodes: FeatureGraph["nodes"]; edges: FeatureGraph["edges"] }> {
-  return fetchJSON(`/api/repos/${repoId}/graph/fix`, {
-    method: "POST",
-    body: JSON.stringify({ message }),
-  });
+// ---- Update Graph ----
+
+export async function startUpdateGraph(repoId: string): Promise<{ status: string; message: string }> {
+  return fetchJSON(`/api/repos/${repoId}/update-graph`, { method: "POST" });
+}
+
+export interface UpdateGraphPending {
+  nodes: FeatureGraph["nodes"];
+  edges: FeatureGraph["edges"];
+  diff: {
+    added: { name: string; description: string }[];
+    removed: { name: string; description: string; has_execution: boolean }[];
+    updated: { name: string; before: Record<string, unknown>; after: Record<string, unknown> }[];
+  };
+}
+
+export async function getPendingUpdate(repoId: string): Promise<UpdateGraphPending> {
+  return fetchJSON(`/api/repos/${repoId}/update-graph/pending`);
+}
+
+export async function applyPendingUpdate(repoId: string): Promise<{ status: string }> {
+  return fetchJSON(`/api/repos/${repoId}/update-graph/apply`, { method: "POST" });
+}
+
+export async function revertPendingUpdate(repoId: string): Promise<{ status: string }> {
+  return fetchJSON(`/api/repos/${repoId}/update-graph/revert`, { method: "POST" });
 }
 
 // ---- Plan ----

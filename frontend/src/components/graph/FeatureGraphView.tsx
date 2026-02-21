@@ -10,9 +10,8 @@ import {
   type Node,
   type Edge,
 } from "@xyflow/react";
-import { getFeatureGraph, getSuggestions, updateFeatureNode, undoGraph, canUndo, fixGraph } from "@/services/api";
+import { getFeatureGraph, getSuggestions, updateFeatureNode, undoGraph, canUndo } from "@/services/api";
 import { FeatureGraphNode } from "./FeatureGraphNode";
-import { GraphFixPanel } from "./GraphFixPanel";
 import type { FeatureNode, FeatureEdge, FeatureSuggestion } from "@/types";
 
 const nodeTypes = { feature: FeatureGraphNode };
@@ -156,7 +155,6 @@ export function FeatureGraphView({
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [undoing, setUndoing] = useState(false);
-  const [showFixPanel, setShowFixPanel] = useState(false);
 
   const handleToggleCollapse = useCallback((nodeId: string) => {
     setCollapsedNodes((prev) => {
@@ -195,12 +193,6 @@ export function FeatureGraphView({
     },
     [selectedNodeId, setSuggestions, setLoadingSuggestions, onSuggestionsLoaded]
   );
-
-  const handleGraphFixed = useCallback((graph: { nodes: typeof rawFeatures; edges: typeof rawEdges }) => {
-    setRawFeatures(graph.nodes);
-    setRawEdges(graph.edges);
-    setUndoAvailable(true);
-  }, []);
 
   const handleUndo = useCallback(async () => {
     setUndoing(true);
@@ -393,28 +385,8 @@ export function FeatureGraphView({
               {undoing ? "Undoing…" : "↩ Undo"}
             </button>
           )}
-          <button
-            onClick={() => setShowFixPanel((v) => !v)}
-            className={`rounded-lg border px-4 py-2 text-xs font-medium transition-colors ${
-              showFixPanel
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-card/80 backdrop-blur-sm border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            ✦ Fix Graph
-          </button>
         </div>
       </div>
-
-      {/* Fix Graph panel */}
-      {showFixPanel && (
-        <GraphFixPanel
-          repoId={repoId}
-          onFixed={handleGraphFixed}
-          onClose={() => setShowFixPanel(false)}
-          onGraphFix={fixGraph}
-        />
-      )}
 
       {/* Notification when generating (panel closed) */}
       {loadingSuggestions && (

@@ -152,37 +152,16 @@ async def create_suggestion(
     return suggestion
 
 
-@router.post("/{repo_id}/graph/fix")
-async def fix_graph(
-    repo_id: str,
-    body: dict,
-    openai_key: str | None = Depends(get_openai_key),
-):
-    """Apply an LLM-generated structural diff to the feature graph."""
-    from app.services.graph_fix_service import apply_graph_fix
-
-    message = body.get("message", "").strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="message is required")
-
-    try:
-        result = await apply_graph_fix(repo_id, message, api_key=openai_key)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    return result
-
-
-@router.get("/{repo_id}/features", response_model=FeatureGraphResponse)
-async def get_features(repo_id: str):
-    """Get full feature graph (nodes + edges) for a repo. Uses in-memory cache when available."""
-    cached = get_cached_graph(repo_id)
-    if cached is not None:
-        return cached
-
-    db = get_supabase()
-
-    # Get the latest analysis run for this repo
+def _get_active_run_id(db, repo_id: str) -> str:
+    """Get the run ID to use for the current graph (excludes pending)."""
+    repo = db.table("repos").select("active_analysis_run_id", "pending_analysis_run_id").eq("id", repo_id).execute()
+    if not repo.data:
+        raise HTTPException(status_code=404, detail="Repo not found")
+    row = repo.data[0]
+    # When pending exists, use active (current) - not the pending run
+    active = row.get("active_analysis_run_id")
+    if active:
+        return active
     run_result = (
         db.table("analysis_runs")
         .select("id")
@@ -194,8 +173,18 @@ async def get_features(repo_id: str):
     )
     if not run_result.data:
         raise HTTPException(status_code=404, detail="No completed analysis found")
+    return run_result.data[0]["id"]
 
-    run_id = run_result.data[0]["id"]
+
+@router.get("/{repo_id}/features", response_model=FeatureGraphResponse)
+async def get_features(repo_id: str):
+    """Get full feature graph (nodes + edges) for a repo. Uses in-memory cache when available."""
+    cached = get_cached_graph(repo_id)
+    if cached is not None:
+        return cached
+
+    db = get_supabase()
+    run_id = _get_active_run_id(db, repo_id)
 
     nodes_result = (
         db.table("feature_nodes")
@@ -214,3 +203,153 @@ async def get_features(repo_id: str):
     edges_data = [e for e in (edges_result.data or []) if e.get("edge_type") == "tree"]
     set_cached_graph(repo_id, nodes_data, edges_data)
     return {"nodes": nodes_data, "edges": edges_data}
+
+
+@router.post("/{repo_id}/update-graph")
+async def start_update_graph(
+    repo_id: str,
+    background_tasks: BackgroundTasks,
+    openai_key: str | None = Depends(get_openai_key),
+):
+    """Start re-analysis with current graph context. Creates pending update for preview."""
+    db = get_supabase()
+    result = db.table("repos").select("*").eq("id", repo_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Repo not found")
+    repo = result.data[0]
+    if repo["status"] not in ("ready", "updating"):
+        raise HTTPException(status_code=400, detail="Repo must be ready to update graph")
+    if repo.get("pending_analysis_run_id"):
+        raise HTTPException(status_code=400, detail="A pending update already exists. Apply or revert it first.")
+
+    from app.workers.analysis_worker import run_analysis_update
+    background_tasks.add_task(run_analysis_update, repo_id, openai_api_key=openai_key)
+
+    db.table("repos").update({"status": "updating"}).eq("id", repo_id).execute()
+    return {"status": "updating", "message": "Re-analyzing repository..."}
+
+
+@router.get("/{repo_id}/update-graph/pending")
+async def get_pending_update(repo_id: str):
+    """Get pending graph update with diff for preview modal."""
+    db = get_supabase()
+    repo = db.table("repos").select("pending_analysis_run_id", "active_analysis_run_id").eq("id", repo_id).execute()
+    if not repo.data or not repo.data[0].get("pending_analysis_run_id"):
+        raise HTTPException(status_code=404, detail="No pending update")
+
+    pending_run_id = repo.data[0]["pending_analysis_run_id"]
+    active_run_id = repo.data[0].get("active_analysis_run_id")
+
+    if not active_run_id:
+        run_result = (
+            db.table("analysis_runs")
+            .select("id")
+            .eq("repo_id", repo_id)
+            .eq("status", "completed")
+            .neq("id", pending_run_id)
+            .order("completed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        active_run_id = run_result.data[0]["id"] if run_result.data else None
+
+    if not active_run_id:
+        raise HTTPException(status_code=404, detail="No current graph to diff against")
+
+    # Fetch current and pending nodes
+    current_nodes = (
+        db.table("feature_nodes").select("*").eq("analysis_run_id", active_run_id).execute()
+    ).data or []
+    pending_nodes = (
+        db.table("feature_nodes").select("*").eq("analysis_run_id", pending_run_id).execute()
+    ).data or []
+    pending_edges = (
+        db.table("feature_edges")
+        .select("*")
+        .eq("analysis_run_id", pending_run_id)
+        .eq("edge_type", "tree")
+        .execute()
+    ).data or []
+
+    current_ids = {n["id"] for n in current_nodes}
+    pending_names = {n["name"] for n in pending_nodes}
+
+    current_by_name = {c["name"]: c for c in current_nodes}
+    added = [n for n in pending_nodes if n["name"] not in current_by_name]
+    removed = [n for n in current_nodes if n["name"] not in pending_names]
+    updated = []
+    for p in pending_nodes:
+        c = current_by_name.get(p["name"])
+        if c and (
+            c.get("description") != p.get("description")
+            or c.get("anchor_files") != p.get("anchor_files")
+        ):
+            updated.append({"before": c, "after": p})
+
+    # Check execution history per removed node
+    removed_ids = [n["id"] for n in removed]
+    node_has_execution: dict[str, bool] = {}
+    if removed_ids:
+        suggs = (
+            db.table("feature_suggestions")
+            .select("feature_node_id")
+            .in_("feature_node_id", removed_ids)
+            .execute()
+        )
+        for s in (suggs.data or []):
+            node_has_execution[s["feature_node_id"]] = True
+    for n in removed:
+        if n["id"] not in node_has_execution:
+            node_has_execution[n["id"]] = False
+
+    return {
+        "nodes": pending_nodes,
+        "edges": pending_edges,
+        "diff": {
+            "added": [{"name": n["name"], "description": n.get("description", "")} for n in added],
+            "removed": [{"name": n["name"], "description": n.get("description", ""), "has_execution": node_has_execution.get(n["id"], False)} for n in removed],
+            "updated": [
+                {"name": u["after"]["name"], "before": u["before"], "after": u["after"]}
+                for u in updated
+            ],
+        },
+    }
+
+
+@router.post("/{repo_id}/update-graph/apply")
+async def apply_pending_update(repo_id: str):
+    """Apply the pending graph update (make it the active graph)."""
+    from app.services.graph_cache import invalidate_graph_cache
+
+    db = get_supabase()
+    repo = db.table("repos").select("pending_analysis_run_id").eq("id", repo_id).execute()
+    if not repo.data or not repo.data[0].get("pending_analysis_run_id"):
+        raise HTTPException(status_code=400, detail="No pending update to apply")
+
+    pending_run_id = repo.data[0]["pending_analysis_run_id"]
+    db.table("repos").update({
+        "active_analysis_run_id": pending_run_id,
+        "pending_analysis_run_id": None,
+    }).eq("id", repo_id).execute()
+    invalidate_graph_cache(repo_id)
+    return {"status": "applied"}
+
+
+@router.post("/{repo_id}/update-graph/revert")
+async def revert_pending_update(repo_id: str):
+    """Revert the pending update (delete the new run, keep current graph)."""
+    from app.db import get_supabase
+    from app.services.graph_cache import invalidate_graph_cache
+
+    db = get_supabase()
+    repo = db.table("repos").select("pending_analysis_run_id").eq("id", repo_id).execute()
+    if not repo.data or not repo.data[0].get("pending_analysis_run_id"):
+        raise HTTPException(status_code=400, detail="No pending update to revert")
+
+    pending_run_id = repo.data[0]["pending_analysis_run_id"]
+    db.table("repos").update({"pending_analysis_run_id": None}).eq("id", repo_id).execute()
+    db.table("feature_edges").delete().eq("analysis_run_id", pending_run_id).execute()
+    db.table("feature_nodes").delete().eq("analysis_run_id", pending_run_id).execute()
+    db.table("analysis_runs").delete().eq("id", pending_run_id).execute()
+    invalidate_graph_cache(repo_id)
+    return {"status": "reverted"}
