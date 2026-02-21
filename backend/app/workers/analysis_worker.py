@@ -74,7 +74,7 @@ async def run_analysis(repo_id: str, openai_api_key: str | None = None) -> None:
         summaries = await summarize_files(clone_path, digest, api_key=openai_api_key)
 
         # Step 5: Infer features via LLM and store in Supabase
-        await infer_features(run_id, digest, summaries, api_key=openai_api_key)
+        await infer_features(run_id, digest, summaries, repo_path=clone_path, api_key=openai_api_key)
 
         # Step 5b: Compute risk scores for feature nodes
         from app.services.risk_service import compute_risk_scores
