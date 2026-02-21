@@ -56,3 +56,15 @@ def set_cached_graph(repo_id: str, nodes: list[Any], edges: list[Any]) -> None:
 def invalidate_graph_cache(repo_id: str) -> None:
     """Remove cached graph for repo_id (e.g. after re-analysis)."""
     _graph_cache.pop(repo_id, None)
+
+
+def invalidate_cache():
+    """Clear all entries from the data cache."""
+    from backend.app.db import cache
+    cache.clear()
+
+
+def refresh_cache_entry(key, new_value):
+    """Update a specific cache entry with a new value."""
+    from backend.app.db import cache
+    cache[key] = new_value
