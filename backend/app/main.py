@@ -1,7 +1,13 @@
+import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+
+# Windows: asyncio subprocess requires ProactorEventLoop (SelectorEventLoop raises NotImplementedError)
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import repos, features, branches, execution

@@ -15,6 +15,9 @@ import logging
 import os
 import re
 import shutil
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 from app.config import settings
@@ -174,6 +177,93 @@ async def _generate_test_file(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_claude_cmd() -> list[str]:
+    """Resolve the claude executable for subprocess. Handles Windows/npm PATH issues."""
+    claude_path = shutil.which("claude")
+    if claude_path:
+        return [claude_path]
+    # Fallback: npx finds the package even when PATH doesn't include npm globals
+    if sys.platform == "win32":
+        npx_claude = shutil.which("npx")
+        if npx_claude:
+            return [npx_claude, "claude"]
+    return ["claude"]
+
+
+def _get_claude_live_log_path() -> Path:
+    """Path to the live log file. Tail this in a separate terminal to watch Claude."""
+    base = Path(settings.sandbox_base_dir).resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "claude_live.log"
+
+
+def _run_claude_sync(
+    cmd: list[str], cwd: str, env: dict, timeout: int, run_id: str
+) -> tuple[int, str, str]:
+    """Run Claude Code CLI with live streaming to file.
+
+    Streams stdout/stderr to sandboxes/claude_live.log in real-time.
+    Also saves full output to execution_logs at the end.
+    Run `tail -f backend/sandboxes/claude_live.log` (or Get-Content -Wait on Windows)
+    in a separate terminal to watch Claude work.
+    Returns (returncode, stdout, stderr).
+    """
+    log_path = _get_claude_live_log_path()
+    full_stdout: list[str] = []
+    full_stderr: list[str] = []
+    file_lock = threading.Lock()
+
+    def read_stream(pipe, is_stderr: bool) -> None:
+        try:
+            for line in iter(pipe.readline, b""):
+                text = line.decode("utf-8", errors="replace")
+                if is_stderr:
+                    full_stderr.append(text)
+                else:
+                    full_stdout.append(text)
+                with file_lock:
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write(text)
+        except Exception:
+            pass
+        finally:
+            pipe.close()
+
+    # Clear and write header at start
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write(f"=== Claude Code run {run_id} ===\n\n")
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+    )
+
+    t1 = threading.Thread(target=read_stream, args=(proc.stdout, False))
+    t2 = threading.Thread(target=read_stream, args=(proc.stderr, True))
+    t1.daemon = True
+    t2.daemon = True
+    t1.start()
+    t2.start()
+
+    try:
+        returncode = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        t1.join(timeout=2)
+        t2.join(timeout=2)
+
+    stdout_text = "".join(full_stdout)
+    stderr_text = "".join(full_stderr)
+    return returncode, stdout_text, stderr_text
+
+
 async def _invoke_claude_code(
     sandbox_path: str,
     prompt: str,
@@ -182,43 +272,79 @@ async def _invoke_claude_code(
     """Invoke the Claude Code CLI in headless mode.
 
     Returns True if the process exits successfully.
+    Uses subprocess.run in a thread to avoid asyncio subprocess NotImplementedError on Windows.
     """
+    claude_cmd = _resolve_claude_cmd()
     cmd = [
-        "claude",
+        *claude_cmd,
         "-p", prompt,
-        "--allowedTools", "Edit,Write,Bash",
-        "--output-format", "json",
+        "--allowedTools", "Read,Edit,Write,Bash",
+        "--output-format", "stream-json",
+        "--verbose",
     ]
+    env = os.environ.copy()
+    timeout = settings.claude_code_timeout
+    log_path = _get_claude_live_log_path()
+    logger.info(f"Claude Code live log: {log_path} — tail this in another terminal")
+    _log(run_id, "build", f"Live log: {log_path}", level="info")
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=sandbox_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        returncode, stdout_text, stderr_text = await asyncio.wait_for(
+            asyncio.to_thread(
+                _run_claude_sync, cmd, sandbox_path, env, timeout, run_id
+            ),
+            timeout=timeout + 10,  # Slightly above subprocess timeout
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=300  # 5 minute timeout
-        )
-
-        stdout_text = stdout.decode("utf-8", errors="replace") if stdout else ""
-        stderr_text = stderr.decode("utf-8", errors="replace") if stderr else ""
 
         if stdout_text:
             _log(run_id, "claude_code", stdout_text[:2000])
         if stderr_text:
             _log(run_id, "claude_code", stderr_text[:2000], level="warn")
 
-        return proc.returncode == 0
+        if returncode != 0:
+            _log(
+                run_id,
+                "claude_code",
+                f"Exit code {returncode}. stderr: {stderr_text[:500]}",
+                level="error",
+            )
+            return False
+
+        return True
 
     except asyncio.TimeoutError:
-        _log(run_id, "claude_code", "Claude Code timed out after 5 minutes", level="error")
+        _log(
+            run_id,
+            "claude_code",
+            f"Claude Code timed out after {timeout}s",
+            level="error",
+        )
         return False
-    except FileNotFoundError:
-        _log(run_id, "claude_code", "Claude Code CLI not found. Is it installed?", level="error")
+    except FileNotFoundError as e:
+        _log(
+            run_id,
+            "claude_code",
+            f"Claude Code CLI not found: {e}. "
+            "Install via https://claude.ai/download or ensure 'claude' is in PATH.",
+            level="error",
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        _log(
+            run_id,
+            "claude_code",
+            f"Claude Code timed out after {timeout}s",
+            level="error",
+        )
         return False
     except Exception as e:
-        _log(run_id, "claude_code", f"Claude Code error: {str(e)}", level="error")
+        _log(
+            run_id,
+            "claude_code",
+            f"Claude Code error: {type(e).__name__}: {e}",
+            level="error",
+        )
+        logger.exception("Claude Code invocation failed")
         return False
 
 
@@ -340,7 +466,9 @@ async def execute_build(execution_run_id: str) -> None:
         github_url = repo["github_url"]
         repo_name = repo["name"]
         feature_slug = _slugify(suggestion["name"])
-        branch_name = f"pee/feature-{feature_slug}"
+        # Unique branch per run to avoid push conflicts with previous runs
+        run_suffix = execution_run_id.replace("-", "")[:8]
+        branch_name = f"pee/feature-{feature_slug}-{run_suffix}"
 
         # Try to get the digest for context
         digest = None

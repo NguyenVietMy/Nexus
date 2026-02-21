@@ -1,17 +1,22 @@
 import json
+import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 from app.config import settings
 
 
 def _make_client(api_key: str | None = None) -> AsyncOpenAI:
-    """Create an AsyncOpenAI client with the given key, or fall back to env."""
+    """Create an AsyncOpenAI client with the given key, or fall back to env.
+
+    Uses an explicit httpx.AsyncClient() to avoid openai's default wrapper
+    passing the deprecated 'proxies' kwarg to httpx (incompatible with httpx>=0.28).
+    """
     key = api_key or settings.openai_api_key
     if not key:
         raise ValueError(
             "No OpenAI API key provided. Pass your key via the X-OpenAI-Key header."
         )
-    return AsyncOpenAI(api_key=key)
+    return AsyncOpenAI(api_key=key, http_client=httpx.AsyncClient())
 
 
 async def call_llm_structured(

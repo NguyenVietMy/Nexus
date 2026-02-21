@@ -49,7 +49,7 @@ cp .env.example .env
 **Start backend:**
 
 ```powershell
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload "--reload-exclude=**/sandboxes/**"
 ```
 
 **Verify:** `GET http://localhost:8000/api/health` → `{"status":"ok","service":"product-evolution-engine"}`
@@ -167,6 +167,15 @@ npm run dev
 - **Execution uses server `OPENAI_API_KEY`** — Plan/test generation uses backend env, not user's key.
 - **Test path hardcoded:** Uses `__tests__/*.test.ts` — Python repos may fail verification.
 - **Verification fails:** `npm test` / `npm run lint` / `npm run typecheck` must exist and pass.
+
+**Watch Claude Code live:** In a separate terminal, run this before clicking Auto Build:
+
+| OS | Command |
+|----|---------|
+| Linux/Mac | `tail -f backend/sandboxes/claude_live.log` |
+| Windows (PowerShell) | `Get-Content backend\sandboxes\claude_live.log -Wait` |
+
+The log file path is also printed in the backend terminal when Claude starts. Output streams there in real-time; the execution modal still shows the full log after completion.
 
 ---
 
