@@ -570,7 +570,7 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
                   {claudeLogs.length === 0 && !isFailed && (
                     <div className="flex items-center gap-2 text-muted-foreground mt-2">
                       <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
-                      Waiting for Claude Code output...
+                      Claude Code is running — output will appear when it finishes.
                     </div>
                   )}
 
