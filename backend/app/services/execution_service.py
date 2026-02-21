@@ -619,26 +619,32 @@ async def _invoke_claude_code(
 async def _run_command(
     cmd: str, cwd: str, timeout: int = 120
 ) -> tuple[int, str, str]:
-    """Run a shell command and return (exit_code, stdout, stderr)."""
-    try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
-        return (
-            proc.returncode or 0,
-            stdout.decode("utf-8", errors="replace") if stdout else "",
-            stderr.decode("utf-8", errors="replace") if stderr else "",
-        )
-    except asyncio.TimeoutError:
-        return (1, "", f"Command timed out after {timeout}s")
-    except Exception as e:
-        return (1, "", str(e))
+    """Run a shell command and return (exit_code, stdout, stderr).
+
+    Uses subprocess.run via asyncio.to_thread rather than
+    asyncio.create_subprocess_shell. On Windows ProactorEventLoop,
+    the async subprocess variant sometimes fails to capture output when
+    the child process exits with a non-zero code; the synchronous variant
+    is more reliable.
+    """
+    def _sync_run() -> tuple[int, str, str]:
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=cwd,
+                timeout=timeout,
+            )
+            return result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired:
+            return 1, "", f"Command timed out after {timeout}s"
+        except Exception as exc:
+            return 1, "", str(exc)
+
+    return await asyncio.to_thread(_sync_run)
 
 
 async def _run_verification(
@@ -675,10 +681,12 @@ async def _run_verification(
         # server is used — avoids Windows Store stub / PATH ambiguity
         py = sys.executable.replace("\\", "/")
         cmd = f'"{py}" -m pytest {target} --tb=short -q' if target else f'"{py}" -m pytest --tb=short -q'
+        logger.info(f"Verification cmd: {cmd} (cwd={sandbox_path})")
         exit_code, stdout, stderr = await _run_command(cmd, cwd=sandbox_path)
         output = (stdout + "\n" + stderr).strip()
         if exit_code != 0:
-            return False, output or f"pytest exited with code {exit_code} (no output captured)"
+            detail = output or f"(no output — cmd: {cmd})"
+            return False, f"pytest exited with code {exit_code}:\n{detail}"
         return True, ""
 
     if language == "java":
