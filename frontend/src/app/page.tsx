@@ -1,14 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { RepoInput } from "@/components/modals/RepoInput";
 import { FeatureGraphView } from "@/components/graph/FeatureGraphView";
 import { SuggestionPanel } from "@/components/panels/SuggestionPanel";
 import { BranchPanel } from "@/components/panels/BranchPanel";
+import { getRepo } from "@/services/api";
 import type { Repo, FeatureSuggestion, StrategicBranch } from "@/types";
 
 export default function Home() {
   const [repo, setRepo] = useState<Repo | null>(null);
+
+  // Poll repo status while analysis is in progress
+  useEffect(() => {
+    if (!repo || (repo.status !== "pending" && repo.status !== "analyzing")) {
+      return;
+    }
+    const interval = setInterval(async () => {
+      try {
+        const updated = await getRepo(repo.id);
+        setRepo(updated);
+        if (updated.status === "ready" || updated.status === "error") {
+          clearInterval(interval);
+        }
+      } catch {
+        clearInterval(interval);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [repo?.id, repo?.status]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<FeatureSuggestion[]>([]);
   const [branches, setBranches] = useState<StrategicBranch[]>([]);

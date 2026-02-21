@@ -46,4 +46,29 @@ app.include_router(execution.router)
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "product-evolution-engine"}
+    """Verify API is running and critical dependencies are reachable."""
+    from app.config import settings
+    from app.db import get_supabase
+
+    checks = {}
+    all_ok = True
+
+    # Database (Supabase)
+    if not settings.supabase_url or not settings.supabase_service_key:
+        checks["database"] = "not_configured"
+        all_ok = False
+    else:
+        try:
+            db = get_supabase()
+            db.table("repos").select("id").limit(1).execute()
+            checks["database"] = "ok"
+        except Exception as e:
+            checks["database"] = "error"
+            checks["database_detail"] = str(e)
+            all_ok = False
+
+    return {
+        "status": "ok" if all_ok else "degraded",
+        "service": "product-evolution-engine",
+        "checks": checks,
+    }
