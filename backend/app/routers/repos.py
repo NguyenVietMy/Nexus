@@ -109,6 +109,27 @@ async def undo_available(repo_id: str):
     return {"can_undo": has_snapshots(repo_id)}
 
 
+@router.post("/{repo_id}/graph/fix")
+async def fix_graph(
+    repo_id: str,
+    body: dict,
+    openai_key: str | None = Depends(get_openai_key),
+):
+    """Apply an LLM-generated structural diff to the feature graph."""
+    from app.services.graph_fix_service import apply_graph_fix
+
+    message = body.get("message", "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    try:
+        result = await apply_graph_fix(repo_id, message, api_key=openai_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return result
+
+
 @router.get("/{repo_id}/features", response_model=FeatureGraphResponse)
 async def get_features(repo_id: str):
     """Get full feature graph (nodes + edges) for a repo. Uses in-memory cache when available."""

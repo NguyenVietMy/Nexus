@@ -94,6 +94,16 @@ export async function canUndo(repoId: string): Promise<boolean> {
   return res.can_undo;
 }
 
+export async function fixGraph(
+  repoId: string,
+  message: string
+): Promise<{ explanation: string; nodes: FeatureGraph["nodes"]; edges: FeatureGraph["edges"] }> {
+  return fetchJSON(`/api/repos/${repoId}/graph/fix`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
 // ---- Execution ----
 
 export async function buildFeature(
