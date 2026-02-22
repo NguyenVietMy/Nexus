@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from app.schemas.execution import (
     BuildRequest,
     UpdatePlanRequest,
+    PlanFeedbackRequest,
     ExecutionRunResponse,
     ExecutionLogResponse,
 )
@@ -149,6 +150,48 @@ async def update_plan(
     db.table("execution_runs").update(
         {"plan_md": body.plan_md}
     ).eq("id", run_id).execute()
+
+    updated = db.table("execution_runs").select("*").eq("id", run_id).execute().data[0]
+    return updated
+
+
+@router.post("/execution/{run_id}/plan-feedback", response_model=ExecutionRunResponse)
+async def submit_plan_feedback(
+    run_id: str,
+    body: PlanFeedbackRequest,
+    background_tasks: BackgroundTasks,
+    openai_key: str | None = Depends(get_openai_key),
+):
+    """Submit user feedback and regenerate the plan so OpenAI can integrate it (same plan rules, feedback in user message)."""
+    if body.rating not in ("positive", "negative"):
+        raise HTTPException(
+            status_code=400,
+            detail="rating must be 'positive' or 'negative'.",
+        )
+    db = get_supabase()
+    result = db.table("execution_runs").select("*").eq("id", run_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Execution run not found")
+
+    run = result.data[0]
+    if not run.get("plan_md"):
+        raise HTTPException(
+            status_code=400,
+            detail="No plan to give feedback on.",
+        )
+
+    db.table("execution_runs").update({
+        "plan_feedback_rating": body.rating,
+        "plan_feedback_comment": body.comment or None,
+    }).eq("id", run_id).execute()
+
+    if run.get("status") == "awaiting_approval" and run.get("sandbox_path"):
+        from app.workers.analysis_worker import run_regenerate_plan_with_feedback
+
+        db.table("execution_runs").update({"status": "planning"}).eq("id", run_id).execute()
+        background_tasks.add_task(
+            run_regenerate_plan_with_feedback, run_id, openai_api_key=openai_key
+        )
 
     updated = db.table("execution_runs").select("*").eq("id", run_id).execute().data[0]
     return updated
