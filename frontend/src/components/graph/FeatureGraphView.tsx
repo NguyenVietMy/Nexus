@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ReactFlow,
   Controls,
@@ -194,6 +194,17 @@ export function FeatureGraphView({
     [selectedNodeId, setSuggestions, setLoadingSuggestions, onSuggestionsLoaded]
   );
 
+  // Stable ref so layout effect doesn't depend on handleEdit (which depends on selectedNodeId).
+  // Prevents full re-layout when opening suggest panel so dragged positions are preserved.
+  const handleEditRef = useRef(handleEdit);
+  handleEditRef.current = handleEdit;
+  const onEditForLayout = useCallback(
+    (nodeId: string, name: string, description: string) => {
+      handleEditRef.current(nodeId, name, description);
+    },
+    []
+  );
+
   const handleUndo = useCallback(async () => {
     setUndoing(true);
     try {
@@ -248,7 +259,7 @@ export function FeatureGraphView({
     load();
   }, [repoId]);
 
-  // Recompute layout when features or collapse state changes (not selection - preserves user positions)
+  // Recompute layout only when features or collapse state changes (not selection - preserves user positions)
   useEffect(() => {
     if (rawFeatures.length === 0) return;
     const result = buildLayout(
@@ -257,11 +268,11 @@ export function FeatureGraphView({
       collapsedNodes,
       null,
       handleToggleCollapse,
-      handleEdit
+      onEditForLayout
     );
     setNodes(result.nodes);
     setEdges(result.edges);
-  }, [rawFeatures, rawEdges, collapsedNodes, handleToggleCollapse, handleEdit, setNodes, setEdges]);
+  }, [rawFeatures, rawEdges, collapsedNodes, handleToggleCollapse, onEditForLayout, setNodes, setEdges]);
 
   // Update selection state only when selectedNodeId changes (avoids full layout reset)
   useEffect(() => {
