@@ -45,15 +45,12 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
     <div className="flex flex-1 min-h-0 w-full items-center justify-center p-8">
       <div className="mx-auto w-full max-w-lg space-y-8">
         <div className="flex flex-col items-center text-center">
-          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
-            <span className="text-2xl font-bold text-primary">PE</span>
-          </div>
           <h2 className="text-2xl font-bold tracking-tight">
             Analyze a Repository
           </h2>
           <p className="mt-2 text-muted-foreground">
             Paste a GitHub URL to generate a feature topology graph, explore
-            expansion suggestions, and auto-build features with Claude Code.
+            expansion suggestions, and auto-build features with Nexus.
           </p>
         </div>
 
@@ -69,10 +66,6 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
               placeholder="sk-..."
               className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
             />
-            <p className="text-[11px] text-muted-foreground">
-              Your key is stored locally in your browser and sent directly to
-              OpenAI. It is never saved on our servers.
-            </p>
           </div>
 
           <div className="space-y-2">
@@ -104,9 +97,6 @@ export function RepoInput({ onRepoCreated }: RepoInputProps) {
           </p>
         )}
 
-        <div className="text-center text-xs text-muted-foreground">
-          Supports TypeScript/Node projects up to 100k LOC
-        </div>
       </div>
     </div>
   );
