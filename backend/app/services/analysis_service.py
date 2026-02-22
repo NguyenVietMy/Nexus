@@ -404,23 +404,38 @@ async def _call_llm_for_domain_features(
     domain: dict,
     domain_summaries: list[dict],
     digest: dict,
+    file_content: str = "",
     api_key: str | None = None,
 ) -> list[dict]:
-    """Pass 2: For a single domain, identify 2-8 sub-features."""
+    """Pass 2: For a single domain, identify 2-8 sub-features.
+
+    Args:
+        domain: Domain dict from Pass 1 (name, description, anchor_files).
+        domain_summaries: File summaries relevant to this domain.
+        digest: Full repo digest.
+        file_content: Actual source code of domain-related files (read from disk).
+        api_key: Optional OpenAI API key.
+    """
     system_prompt = (
         "You are a senior software architect analyzing a specific product domain "
-        "within a codebase. Given the domain name, its description, and the relevant files, "
-        "identify the specific user-facing features within this domain.\n\n"
+        "within a codebase. You are given the domain name, its description, file summaries, "
+        "and the ACTUAL SOURCE CODE of relevant files. "
+        "Identify the specific user-facing features within this domain.\n\n"
         "IMPORTANT RULES:\n"
+        "- ONLY include features you can see actually implemented in the code provided. "
+        "Do NOT speculate or infer features based on dependencies, framework conventions, "
+        "or what apps like this 'usually have'.\n"
         "- Each feature should be something a developer could write a PR for, or a user could interact with.\n"
         "- DO NOT create architectural/infrastructure nodes like 'Service Layer', 'Database Integration', "
         "'API Gateway', 'Middleware', 'Utils', 'Config', 'Shared Components', 'Core Infrastructure'.\n"
         "- Name features as product capabilities, not code structure.\n"
+        "- Every feature MUST have at least one anchor_file from the files shown to you.\n"
         "- Identify 2-8 sub-features for this domain.\n\n"
         "Return a JSON object with key 'features' containing a list. Each feature must have:\n"
         "- name (string): concise, product-oriented feature name\n"
         "- description (string): 1-2 sentence explanation of what this feature does\n"
-        "- anchor_files (list[string]): relative file paths most related to this feature\n"
+        "- anchor_files (list[string]): relative file paths most related to this feature "
+        "(MUST be files from the code provided)\n"
         "- parent_feature (string): MUST be exactly the domain name provided below\n"
         "- related_features (list[string]): names of related features within this domain\n"
         + _FEW_SHOT_EXAMPLES
@@ -430,14 +445,14 @@ async def _call_llm_for_domain_features(
         f"Domain: {domain['name']}\n"
         f"Domain description: {domain['description']}\n"
         f"Framework: {digest.get('framework', 'unknown')}\n\n"
-        f"Files related to this domain:\n"
+        f"File summaries for this domain:\n"
     )
     for s in domain_summaries:
         user_content += f"- {s['file_path']}: {s['summary']} (role: {s.get('role', 'other')})\n"
 
-    # Include domain anchor files for additional context
-    if domain.get("anchor_files"):
-        user_content += f"\nDomain anchor files: {', '.join(domain['anchor_files'])}\n"
+    # Include actual source code
+    if file_content:
+        user_content += f"\n\nACTUAL SOURCE CODE (use this to verify features exist):\n{file_content}\n"
 
     items = await call_llm_structured_list(
         system_prompt=system_prompt,
@@ -476,23 +491,116 @@ def _match_summaries_to_domain(
     return matched if len(matched) >= 2 else file_summaries
 
 
+# Role priority for file reading budget allocation (lower = higher priority)
+_ROLE_PRIORITY = {
+    "page": 0, "api": 1, "schema": 2, "entry": 3,
+    "component": 4, "test": 5, "config": 6, "util": 7,
+    "style": 8, "other": 9,
+}
+
+# Budget per domain for actual file content in Pass 2
+_DOMAIN_CONTENT_BUDGET = 60_000  # chars
+
+
+def _read_domain_files(
+    repo_path: str,
+    domain: dict,
+    domain_summaries: list[dict],
+    file_tree: list[str],
+) -> str:
+    """Read actual file content for a domain's relevant files within a budget.
+
+    Reads anchor files first, then sibling files from the same directories,
+    prioritized by role. Returns formatted file content string.
+    """
+    root = Path(repo_path)
+    anchor_files = set(domain.get("anchor_files", []))
+
+    # Collect all candidate files: anchors + siblings from anchor directories
+    anchor_dirs = set()
+    for af in anchor_files:
+        parts = af.rsplit("/", 1)
+        if len(parts) > 1:
+            anchor_dirs.add(parts[0])
+
+    candidates: list[tuple[int, str, str]] = []  # (priority, path, role)
+
+    # Build a lookup from file_path -> role using summaries
+    path_to_role: dict[str, str] = {}
+    for s in domain_summaries:
+        path_to_role[s["file_path"]] = s.get("role", "other")
+
+    # Add anchor files first (highest priority)
+    for af in anchor_files:
+        if af in file_tree:
+            role = path_to_role.get(af, "other")
+            candidates.append((_ROLE_PRIORITY.get(role, 9), af, role))
+
+    # Add sibling files from anchor directories
+    for fp in file_tree:
+        if fp in anchor_files:
+            continue  # already added
+        if any(fp.startswith(d + "/") for d in anchor_dirs):
+            role = path_to_role.get(fp, "other")
+            candidates.append((_ROLE_PRIORITY.get(role, 9) + 10, fp, role))
+
+    # Sort by priority (anchor files first, then by role)
+    candidates.sort(key=lambda x: x[0])
+
+    # Read files within budget
+    parts: list[str] = []
+    total_chars = 0
+
+    for _priority, rel_path, role in candidates:
+        if total_chars >= _DOMAIN_CONTENT_BUDGET:
+            break
+
+        abs_path = root / rel_path
+        if not abs_path.is_file():
+            continue
+
+        try:
+            content = abs_path.read_text(encoding="utf-8", errors="ignore")
+            content = content[:MAX_FILE_READ_BYTES]
+        except OSError:
+            continue
+
+        # Check if adding this file would exceed budget
+        entry = f"--- {rel_path} (role: {role}) ---\n{content}\n"
+        if total_chars + len(entry) > _DOMAIN_CONTENT_BUDGET and parts:
+            break  # don't exceed budget, but always include at least one file
+
+        parts.append(entry)
+        total_chars += len(entry)
+
+    return "\n".join(parts)
+
+
 async def infer_features(
     run_id: str, digest: dict, file_summaries: list[dict],
+    repo_path: str = "",
     api_key: str | None = None,
 ) -> dict:
     """LLM-infer feature nodes and edges using two-pass approach, then store in Supabase.
 
     Pass 1: Identify top-level product domains.
-    Pass 2: For each domain, identify sub-features.
+    Pass 2: For each domain, read actual source code and identify sub-features.
+    Post-processing: Validate anchor files exist in the repo.
     Returns {"nodes": [...], "edges": [...]}.
     """
+    file_tree_set = set(digest.get("file_tree", []))
+
     # Pass 1: Get top-level domains
     domains = await _call_llm_for_domains(digest, file_summaries, api_key=api_key)
 
     if not domains:
         return {"nodes": [], "edges": []}
 
-    # Pass 2: For each domain, get sub-features
+    # Validate domain anchor_files against actual file tree
+    for d in domains:
+        d["anchor_files"] = [f for f in d.get("anchor_files", []) if f in file_tree_set]
+
+    # Pass 2: For each domain, read actual files and get sub-features
     raw_features: list[dict] = []
 
     # Add domains as root features
@@ -505,16 +613,38 @@ async def infer_features(
             "related_features": [],
         })
 
-    # Expand each domain into sub-features
+    # Expand each domain into sub-features with actual code context
     for d in domains:
         domain_summaries = _match_summaries_to_domain(d, file_summaries)
+
+        # Layer 1: Read actual source code for this domain's files
+        file_content = ""
+        if repo_path:
+            file_content = _read_domain_files(
+                repo_path, d, domain_summaries, digest.get("file_tree", [])
+            )
+
         sub_features = await _call_llm_for_domain_features(
-            d, domain_summaries, digest, api_key=api_key
+            d, domain_summaries, digest,
+            file_content=file_content, api_key=api_key,
         )
         for sf in sub_features:
             # Ensure parent_feature points to the domain
             sf["parent_feature"] = d["name"]
             raw_features.append(sf)
+
+    # Layer 2: Post-inference validation — drop sub-features with no valid anchor files
+    validated_features: list[dict] = []
+    for f in raw_features:
+        is_root = f.get("parent_feature") is None
+        valid_anchors = [a for a in f.get("anchor_files", []) if a in file_tree_set]
+        f["anchor_files"] = valid_anchors  # clean up invalid paths
+
+        if is_root or valid_anchors:
+            validated_features.append(f)
+        # else: sub-feature with 0 valid anchors → hallucinated, drop it
+
+    raw_features = validated_features
 
     if not raw_features:
         return {"nodes": [], "edges": []}
