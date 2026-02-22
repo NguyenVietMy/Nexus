@@ -512,6 +512,7 @@ async def _invoke_claude_code(
     cmd = [
         *claude_cmd,
         "-p", prompt,
+        "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "--verbose",
     ]
@@ -639,7 +640,10 @@ async def _run_verification(
                     "Running full pytest suite."
                 )
 
-        cmd = f"python -m pytest {target} --tb=short -q" if target else "python -m pytest --tb=short -q"
+        # Use sys.executable to guarantee the same Python that runs this
+        # server is used — avoids Windows Store stub / PATH ambiguity
+        py = sys.executable.replace("\\", "/")
+        cmd = f'"{py}" -m pytest {target} --tb=short -q' if target else f'"{py}" -m pytest --tb=short -q'
         exit_code, stdout, stderr = await _run_command(cmd, cwd=sandbox_path)
         output = (stdout + "\n" + stderr).strip()
         if exit_code != 0:
