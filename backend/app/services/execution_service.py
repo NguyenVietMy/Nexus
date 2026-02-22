@@ -429,7 +429,15 @@ def _run_claude_sync(
     file_lock = threading.Lock()
 
     def read_stdout(pipe) -> None:
-        """Read stdout, parse stream-json, write readable output."""
+        """Read stdout, parse stream-json, write readable output to log file.
+
+        On Windows, Node.js buffers stdout to the pipe (non-TTY mode) and only
+        flushes when the buffer fills (~64 KB) or the process exits. Real-time
+        DB inserts from this thread would never fire during execution.
+        DB inserts are therefore done in a batch after the process exits —
+        see _invoke_claude_code. We still write to the log file here so
+        `tail -f claude_live_*.log` shows output as soon as it arrives.
+        """
         try:
             for line in iter(pipe.readline, b""):
                 raw = line.decode("utf-8", errors="replace")
@@ -439,11 +447,6 @@ def _run_claude_sync(
                     with file_lock:
                         with open(log_path, "a", encoding="utf-8") as f:
                             f.write(parsed + "\n")
-                    # Also insert into DB for frontend polling
-                    try:
-                        _log(run_id, "claude_code", parsed)
-                    except Exception:
-                        pass  # Don't let DB errors kill the stream reader
         except Exception:
             pass
         finally:
@@ -529,6 +532,34 @@ async def _invoke_claude_code(
             ),
             timeout=timeout + 10,
         )
+
+        # Batch-insert all parsed claude_code logs from stdout.
+        # On Windows, Node.js buffers stdout to the pipe in non-TTY mode and
+        # only flushes when the buffer fills or the process exits. The
+        # read_stdout thread therefore collects lines but can't insert them in
+        # real-time. We parse the full accumulated stdout here (after exit) and
+        # bulk-insert in one Supabase call — users see all output at once.
+        claude_log_rows = []
+        for raw_line in stdout_text.splitlines():
+            parsed = _parse_stream_json_line(raw_line)
+            if parsed:
+                claude_log_rows.append({
+                    "execution_run_id": run_id,
+                    "step": "claude_code",
+                    "message": parsed,
+                    "log_level": "info",
+                })
+        if claude_log_rows:
+            try:
+                get_supabase().table("execution_logs").insert(claude_log_rows).execute()
+                logger.info(f"Inserted {len(claude_log_rows)} claude_code log entries for run {run_id[:8]}")
+            except Exception as exc:
+                logger.warning(f"Bulk claude_code log insert failed, falling back: {exc}")
+                for row in claude_log_rows:
+                    try:
+                        get_supabase().table("execution_logs").insert(row).execute()
+                    except Exception:
+                        pass
 
         if stderr_text:
             _log(run_id, "claude_code", stderr_text[:2000], level="warn")
