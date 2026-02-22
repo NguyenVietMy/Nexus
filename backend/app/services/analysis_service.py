@@ -68,6 +68,22 @@ class InferredFeature(BaseModel):
     related_features: list[str] = []
 
 
+class InferredDomain(BaseModel):
+    """Top-level product domain identified in Pass 1."""
+    name: str
+    description: str
+    anchor_files: list[str] = []
+
+
+class InferredSubFeature(BaseModel):
+    """Sub-feature within a domain identified in Pass 2."""
+    name: str
+    description: str
+    anchor_files: list[str] = []
+    parent_feature: str  # always the domain name
+    related_features: list[str] = []
+
+
 class InferredFeatureUpdate(BaseModel):
     """Feature for graph update - supports explicit mapping to existing nodes."""
     name: str
@@ -272,62 +288,233 @@ async def summarize_files(
 
 
 # ---------------------------------------------------------------------------
+# Shared prompt fragments for product-oriented feature extraction
+# ---------------------------------------------------------------------------
+
+_FEW_SHOT_EXAMPLES = """
+EXAMPLES of GOOD vs BAD feature names:
+GOOD: "User Authentication", "Social Login", "Password Reset", "Product Search", "Shopping Cart", "Order Checkout", "Email Notifications", "User Profile", "Admin Dashboard", "File Upload", "Real-time Chat", "Payment Processing"
+BAD: "Service Layer", "Database Integration", "API Routes", "Middleware", "Utils & Helpers", "State Management", "Error Handling", "Config", "Core Module", "Shared Components", "Worker Processes"
+
+Example tree for an e-commerce Next.js app:
+- Authentication (root) → Social Login, Password Reset, Session Management
+- Product Catalog (root) → Product Search, Category Filtering, Product Detail Page
+- Shopping (root) → Cart Management, Checkout Flow, Order History
+- User Account (root) → Profile Settings, Address Book, Notification Preferences
+"""
+
+# Role ordering for route-anchored context: high-signal first
+_ROLE_SECTIONS = [
+    ("page", "USER-FACING ROUTES & PAGES"),
+    ("api", "API ENDPOINTS"),
+    ("schema", "SCHEMAS & MODELS"),
+    ("component", "COMPONENTS"),
+    ("entry", "ENTRY POINTS"),
+    ("test", "TESTS"),
+    ("config", "CONFIGURATION"),
+    ("util", "UTILITIES"),
+    ("style", "STYLES"),
+    ("other", "OTHER FILES"),
+]
+
+
+def _build_route_anchored_context(
+    digest: dict, file_summaries: list[dict]
+) -> str:
+    """Build user prompt content with files grouped by role, high-signal first."""
+    parts = [
+        f"Framework: {digest.get('framework', 'unknown')}",
+        f"Dependencies: {json.dumps(digest.get('dependencies', {}))}",
+        "",
+    ]
+
+    # Group summaries by role
+    by_role: dict[str, list[dict]] = {}
+    for s in file_summaries:
+        role = s.get("role", "other")
+        by_role.setdefault(role, []).append(s)
+
+    # Emit each role section in priority order
+    for role_key, section_title in _ROLE_SECTIONS:
+        entries = by_role.pop(role_key, [])
+        if entries:
+            parts.append(f"{section_title}:")
+            for s in entries:
+                parts.append(f"- {s['file_path']}: {s['summary']} (role: {role_key})")
+            parts.append("")
+
+    # Any remaining roles not in _ROLE_SECTIONS
+    for role_key, entries in by_role.items():
+        if entries:
+            parts.append(f"{role_key.upper()} FILES:")
+            for s in entries:
+                parts.append(f"- {s['file_path']}: {s['summary']} (role: {role_key})")
+            parts.append("")
+
+    # Full file tree for reference
+    file_tree = digest.get("file_tree", [])
+    if file_tree:
+        parts.append(f"Full file tree (for reference):")
+        parts.append(chr(10).join(file_tree))
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Step 4: Feature Inference (LLM-powered, stores to Supabase)
+# Two-pass approach: domains first, then sub-features per domain
 # ---------------------------------------------------------------------------
 
 
-async def _call_llm_for_features(
+async def _call_llm_for_domains(
     digest: dict, file_summaries: list[dict], api_key: str | None = None
 ) -> list[dict]:
-    """Call the LLM to infer feature nodes from the repo digest + summaries."""
+    """Pass 1: Identify top-level product domains from the codebase."""
     system_prompt = (
         "You are a senior software architect analyzing a codebase to identify "
-        "its feature topology. Given the file tree, framework, dependencies, "
-        "and file summaries, identify all distinct features in the codebase.\n\n"
-        "Return a JSON object with key 'features' containing a list. "
-        "Each feature must have:\n"
-        "- name (string): concise feature name\n"
-        "- description (string): 1-2 sentence explanation\n"
-        "- anchor_files (list[string]): relative file paths most related to this feature\n"
-        "- parent_feature (string|null): name of parent feature if this is a sub-feature. "
-        "Each feature has at most ONE parent. Use only for hierarchy.\n"
-        "- related_features (list[string]): names of related features (for context only; not used for graph)\n\n"
-        "Generate as many features as the codebase warrants. "
-        "Organize them in a strict TREE: every node (except roots) has exactly one parent. "
-        "No lateral connections between siblings. No cross-branch links. "
-        "Top-level features should have parent_feature = null. "
-        "There can be 2, 3, or many roots."
+        "its top-level PRODUCT DOMAINS — the major user-facing capability areas.\n\n"
+        "IMPORTANT RULES:\n"
+        "- Identify domains from the PRODUCT perspective, not the code architecture.\n"
+        "- Each domain should represent a major area of functionality a user or stakeholder cares about.\n"
+        "- DO NOT create architectural/infrastructure domains like 'Service Layer', 'Database Integration', "
+        "'API Gateway', 'Middleware', 'Utils', 'Config', 'Shared Components', 'Core Infrastructure'.\n"
+        "- Instead, identify WHAT the code DOES for users: 'Authentication', 'Content Management', "
+        "'Billing', 'Search & Discovery', 'Notifications', etc.\n"
+        "- Aim for 3-8 top-level domains based on routes, pages, API endpoints, and business logic.\n\n"
+        "Return a JSON object with key 'domains' containing a list. Each domain must have:\n"
+        "- name (string): concise, product-oriented domain name\n"
+        "- description (string): 1-2 sentence explanation of what this domain does for the user\n"
+        "- anchor_files (list[string]): relative file paths most related to this domain\n"
+        + _FEW_SHOT_EXAMPLES
     )
 
-    user_content = (
-        f"Framework: {digest.get('framework', 'unknown')}\n"
-        f"Dependencies: {json.dumps(digest.get('dependencies', {}))}\n"
-        f"Scripts: {json.dumps(digest.get('scripts', {}))}\n"
-        f"File tree:\n{chr(10).join(digest.get('file_tree', []))}\n\n"
-        f"File summaries:\n"
-    )
-    for s in file_summaries:
-        user_content += f"- {s['file_path']}: {s['summary']} (role: {s['role']})\n"
+    user_content = _build_route_anchored_context(digest, file_summaries)
 
     items = await call_llm_structured_list(
         system_prompt=system_prompt,
         user_prompt=user_content,
-        item_model=InferredFeature,
+        item_model=InferredDomain,
+        list_key="domains",
+        api_key=api_key,
+    )
+    return [item.model_dump() for item in items]
+
+
+async def _call_llm_for_domain_features(
+    domain: dict,
+    domain_summaries: list[dict],
+    digest: dict,
+    api_key: str | None = None,
+) -> list[dict]:
+    """Pass 2: For a single domain, identify 2-8 sub-features."""
+    system_prompt = (
+        "You are a senior software architect analyzing a specific product domain "
+        "within a codebase. Given the domain name, its description, and the relevant files, "
+        "identify the specific user-facing features within this domain.\n\n"
+        "IMPORTANT RULES:\n"
+        "- Each feature should be something a developer could write a PR for, or a user could interact with.\n"
+        "- DO NOT create architectural/infrastructure nodes like 'Service Layer', 'Database Integration', "
+        "'API Gateway', 'Middleware', 'Utils', 'Config', 'Shared Components', 'Core Infrastructure'.\n"
+        "- Name features as product capabilities, not code structure.\n"
+        "- Identify 2-8 sub-features for this domain.\n\n"
+        "Return a JSON object with key 'features' containing a list. Each feature must have:\n"
+        "- name (string): concise, product-oriented feature name\n"
+        "- description (string): 1-2 sentence explanation of what this feature does\n"
+        "- anchor_files (list[string]): relative file paths most related to this feature\n"
+        "- parent_feature (string): MUST be exactly the domain name provided below\n"
+        "- related_features (list[string]): names of related features within this domain\n"
+        + _FEW_SHOT_EXAMPLES
+    )
+
+    user_content = (
+        f"Domain: {domain['name']}\n"
+        f"Domain description: {domain['description']}\n"
+        f"Framework: {digest.get('framework', 'unknown')}\n\n"
+        f"Files related to this domain:\n"
+    )
+    for s in domain_summaries:
+        user_content += f"- {s['file_path']}: {s['summary']} (role: {s.get('role', 'other')})\n"
+
+    # Include domain anchor files for additional context
+    if domain.get("anchor_files"):
+        user_content += f"\nDomain anchor files: {', '.join(domain['anchor_files'])}\n"
+
+    items = await call_llm_structured_list(
+        system_prompt=system_prompt,
+        user_prompt=user_content,
+        item_model=InferredSubFeature,
         list_key="features",
         api_key=api_key,
     )
     return [item.model_dump() for item in items]
 
 
+def _match_summaries_to_domain(
+    domain: dict, file_summaries: list[dict]
+) -> list[dict]:
+    """Find file summaries relevant to a domain based on anchor files and paths."""
+    anchor_files = set(domain.get("anchor_files", []))
+    if not anchor_files:
+        return file_summaries  # fallback: send all summaries
+
+    # Find summaries whose file_path matches or is in the same directory as an anchor
+    anchor_dirs = set()
+    for af in anchor_files:
+        parts = af.rsplit("/", 1)
+        if len(parts) > 1:
+            anchor_dirs.add(parts[0])
+
+    matched = []
+    for s in file_summaries:
+        fp = s["file_path"]
+        if fp in anchor_files:
+            matched.append(s)
+        elif any(fp.startswith(d + "/") for d in anchor_dirs):
+            matched.append(s)
+
+    # If too few matched, return all summaries as fallback
+    return matched if len(matched) >= 2 else file_summaries
+
+
 async def infer_features(
     run_id: str, digest: dict, file_summaries: list[dict],
     api_key: str | None = None,
 ) -> dict:
-    """LLM-infer feature nodes and edges, then store them in Supabase.
+    """LLM-infer feature nodes and edges using two-pass approach, then store in Supabase.
 
+    Pass 1: Identify top-level product domains.
+    Pass 2: For each domain, identify sub-features.
     Returns {"nodes": [...], "edges": [...]}.
     """
-    raw_features = await _call_llm_for_features(digest, file_summaries, api_key=api_key)
+    # Pass 1: Get top-level domains
+    domains = await _call_llm_for_domains(digest, file_summaries, api_key=api_key)
+
+    if not domains:
+        return {"nodes": [], "edges": []}
+
+    # Pass 2: For each domain, get sub-features
+    raw_features: list[dict] = []
+
+    # Add domains as root features
+    for d in domains:
+        raw_features.append({
+            "name": d["name"],
+            "description": d["description"],
+            "anchor_files": d.get("anchor_files", []),
+            "parent_feature": None,
+            "related_features": [],
+        })
+
+    # Expand each domain into sub-features
+    for d in domains:
+        domain_summaries = _match_summaries_to_domain(d, file_summaries)
+        sub_features = await _call_llm_for_domain_features(
+            d, domain_summaries, digest, api_key=api_key
+        )
+        for sf in sub_features:
+            # Ensure parent_feature points to the domain
+            sf["parent_feature"] = d["name"]
+            raw_features.append(sf)
 
     if not raw_features:
         return {"nodes": [], "edges": []}
@@ -454,13 +641,22 @@ async def _call_llm_for_features_update(
     """
     system_prompt = (
         "You are a senior software architect re-analyzing a codebase to update "
-        "its feature topology. You are given the CURRENT feature graph and fresh "
+        "its PRODUCT FEATURE TOPOLOGY. You are given the CURRENT feature graph and fresh "
         "analysis of the repo (file tree, summaries).\n\n"
         "Your job: produce an UPDATED feature list that reflects the current state "
         "of the codebase while being CONSERVATIVE with the existing graph.\n\n"
+        "IMPORTANT: Identify features from the PRODUCT perspective, not the code architecture.\n"
+        "- Each feature should be something a developer could write a PR for, or a user could interact with.\n"
+        "- DO NOT create architectural/infrastructure nodes like 'Service Layer', 'Database Integration', "
+        "'API Gateway', 'Middleware', 'Utils', 'Config', 'Shared Components', 'Core Infrastructure'.\n"
+        "- Instead, identify WHAT the code DOES for users: 'User Authentication', 'Search & Filtering', "
+        "'Email Notifications', 'Payment Processing', 'Dashboard Analytics', etc.\n"
+        "- Top-level nodes should be major product domains (e.g., 'Authentication', 'Content Management', 'Billing').\n"
+        "- Child nodes should be specific capabilities within that domain.\n"
+        "- Aim for 15-40 features organized in a tree with 2-4 levels of depth.\n\n"
         "Return a JSON object with key 'features' containing a list. Each feature must have:\n"
-        "- name (string): concise feature name\n"
-        "- description (string): 1-2 sentence explanation\n"
+        "- name (string): concise, product-oriented feature name (NOT code-structure names)\n"
+        "- description (string): 1-2 sentence explanation of what this feature does for the user\n"
         "- anchor_files (list[string]): relative file paths most related to this feature\n"
         "- parent_feature (string|null): name of parent feature if this is a sub-feature\n"
         "- related_features (list[string]): names of related features (for context only)\n"
@@ -475,9 +671,13 @@ async def _call_llm_for_features_update(
         "2. Add new features only when they clearly exist in the codebase.\n"
         "3. Omit features that no longer exist in the codebase (they will be removed).\n"
         "4. Use existing_node_id for features that map to current nodes, so we preserve identity.\n"
-        "5. Organize in a strict TREE: every node (except roots) has exactly one parent.\n"
+        "5. Organize in a strict TREE: every node (except roots) has exactly one parent. "
+        "There can be 2-8 roots.\n"
         "6. Features added via 'Add feature' and merged PRs are in the repo - treat them like any "
-        "other node; include or omit based on whether the code still exists."
+        "other node; include or omit based on whether the code still exists.\n"
+        "7. If existing nodes use architectural names (e.g., 'Service Layer'), rename them to "
+        "product-oriented names that describe what the code actually does for users.\n"
+        + _FEW_SHOT_EXAMPLES
     )
 
     graph_context = _build_current_graph_context(current_nodes)
@@ -485,14 +685,8 @@ async def _call_llm_for_features_update(
         f"CURRENT FEATURE GRAPH (preserve identity via existing_node_id when applicable):\n"
         f"{graph_context}\n\n"
         f"---\n\n"
-        f"Framework: {digest.get('framework', 'unknown')}\n"
-        f"Dependencies: {json.dumps(digest.get('dependencies', {}))}\n"
-        f"Scripts: {json.dumps(digest.get('scripts', {}))}\n"
-        f"File tree:\n{chr(10).join(digest.get('file_tree', []))}\n\n"
-        f"File summaries:\n"
+        + _build_route_anchored_context(digest, file_summaries)
     )
-    for s in file_summaries:
-        user_content += f"- {s['file_path']}: {s['summary']} (role: {s['role']})\n"
 
     items = await call_llm_structured_list(
         system_prompt=system_prompt,
