@@ -96,22 +96,26 @@ export async function canUndo(repoId: string): Promise<boolean> {
 
 export async function suggestPlacement(
   repoId: string,
-  description: string
+  description: string,
+  criteria?: { priority: string; complexity: string; tags: string },
+  customCriteria?: string,
 ): Promise<{ candidates: { node_id: string; node_name: string; rationale: string }[] }> {
   return fetchJSON(`/api/repos/${repoId}/suggest-placement`, {
     method: "POST",
-    body: JSON.stringify({ description }),
+    body: JSON.stringify({ description, criteria, custom_criteria: customCriteria }),
   });
 }
 
 export async function createSuggestion(
   repoId: string,
   parentNodeId: string,
-  description: string
+  description: string,
+  criteria?: { priority: string; complexity: string; tags: string },
+  customCriteria?: string,
 ): Promise<FeatureSuggestion> {
   return fetchJSON<FeatureSuggestion>(`/api/repos/${repoId}/create-suggestion`, {
     method: "POST",
-    body: JSON.stringify({ parent_node_id: parentNodeId, description }),
+    body: JSON.stringify({ parent_node_id: parentNodeId, description, criteria, custom_criteria: customCriteria }),
   });
 }
 
@@ -239,6 +243,19 @@ export async function markPrMerged(runId: string): Promise<ExecutionRun> {
     method: "POST",
   });
 }
+
+export async function generateSuggestions(params: { criteria: string }): Promise<unknown> {
+  return fetchJSON("/api/suggestions/generate", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+const suggestionService = {
+  generateSuggestions,
+};
+
+export default suggestionService;
 
 export async function getExecutionStatus(
   runId: string

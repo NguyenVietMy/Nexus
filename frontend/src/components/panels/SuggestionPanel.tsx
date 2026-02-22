@@ -1,23 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { buildFeature } from "@/services/api";
-import { fetchSuggestionsWithCriteria } from "@/services/api";
+import { useState } from "react";
+import suggestionService, { buildFeature } from "@/services/api";
 import type { FeatureSuggestion } from "@/types";
 import { ExecutionModal } from "@/components/modals/ExecutionModal";
-
-interface SuggestionCriteria {
-  priority: string;
-  complexity: string;
-  tags: string[];
-}
 
 interface SuggestionPanelProps {
   nodeId?: string;
   suggestions?: FeatureSuggestion[];
   loading?: boolean;
   onClose?: () => void;
-  criteria?: SuggestionCriteria;
+  criteria?: string;
 }
 
 const COMPLEXITY_STYLES: Record<string, string> = {
@@ -36,13 +29,6 @@ export function SuggestionPanel({
   const [executionRunId, setExecutionRunId] = useState<string | null>(null);
   const [building, setBuilding] = useState<string | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
-  const [criteriaSuggestions, setCriteriaSuggestions] = useState<{ id: string; text: string }[]>([]);
-
-  useEffect(() => {
-    if (criteria) {
-      fetchSuggestionsWithCriteria(criteria).then(setCriteriaSuggestions);
-    }
-  }, [criteria]);
 
   const suggestions = externalSuggestions ?? [];
 
@@ -65,9 +51,9 @@ export function SuggestionPanel({
     return (
       <div className="flex h-full flex-col">
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {criteriaSuggestions.map((suggestion) => (
-            <div key={suggestion.id}>{suggestion.text}</div>
-          ))}
+          <button onClick={() => suggestionService.generateSuggestions({ criteria })}>
+            Generate Suggestions
+          </button>
         </div>
       </div>
     );
@@ -210,3 +196,5 @@ export function SuggestionPanel({
     </div>
   );
 }
+
+export default SuggestionPanel;

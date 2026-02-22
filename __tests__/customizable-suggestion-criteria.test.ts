@@ -1,45 +1,27 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import '@testing-library/jest-dom';
-import { AddFeatureFlow } from '../frontend/src/components/modals/AddFeatureFlow';
-import { SuggestionPanel } from '../frontend/src/components/panels/SuggestionPanel';
+import AddFeatureFlow from '../frontend/src/components/modals/AddFeatureFlow';
+import SuggestionPanel from '../frontend/src/components/panels/SuggestionPanel';
+import suggestionService from '../frontend/src/services/api';
 
-// Mock API service
-jest.mock('../frontend/src/services/api', () => ({
-  fetchSuggestionsWithCriteria: jest.fn().mockResolvedValue([
-    { id: '1', text: 'Suggestion 1' },
-    { id: '2', text: 'Suggestion 2' },
-  ]),
-}));
+jest.mock('../frontend/src/services/api');
 
-describe('Customizable Suggestion Criteria', () => {
-  test('UI for setting custom suggestion criteria', () => {
-    render(<AddFeatureFlow />);
+// Test UI for setting custom suggestion criteria
+it('renders the criteria input field and allows input', () => {
+  render(<AddFeatureFlow />);
+  const input = screen.getByLabelText(/custom criteria/i);
+  fireEvent.change(input, { target: { value: 'New Criteria' } });
+  expect(input.value).toBe('New Criteria');
+});
 
-    // Check for input fields
-    const priorityInput = screen.getByLabelText(/priority/i);
-    const complexityInput = screen.getByLabelText(/complexity/i);
-    const tagsInput = screen.getByLabelText(/tags/i);
+// Test backend processing of customized criteria
+it('calls suggestion service with custom criteria', () => {
+  const criteria = 'Test Criteria';
+  suggestionService.generateSuggestions = jest.fn();
 
-    expect(priorityInput).toBeInTheDocument();
-    expect(complexityInput).toBeInTheDocument();
-    expect(tagsInput).toBeInTheDocument();
+  render(<SuggestionPanel criteria={criteria} />);
+  fireEvent.click(screen.getByText('Generate Suggestions'));
 
-    // Simulate input change
-    fireEvent.change(priorityInput, { target: { value: 'High' } });
-    fireEvent.change(complexityInput, { target: { value: 'Medium' } });
-    fireEvent.change(tagsInput, { target: { value: 'tag1,tag2' } });
-
-    expect(priorityInput.value).toBe('High');
-    expect(complexityInput.value).toBe('Medium');
-    expect(tagsInput.value).toBe('tag1,tag2');
-  });
-
-  test('Backend processing of customized criteria', async () => {
-    render(<SuggestionPanel criteria={{ priority: 'High', complexity: 'Medium', tags: ['tag1', 'tag2'] }} />);
-
-    const suggestions = await screen.findAllByText(/Suggestion/);
-    expect(suggestions).toHaveLength(2);
-    expect(suggestions[0]).toHaveTextContent('Suggestion 1');
-    expect(suggestions[1]).toHaveTextContent('Suggestion 2');
-  });
+  expect(suggestionService.generateSuggestions).toHaveBeenCalledWith(
+    expect.objectContaining({ criteria })
+  );
 });

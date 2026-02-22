@@ -41,6 +41,7 @@ export function AddFeatureFlow({ repoId, onClose }: AddFeatureFlowProps) {
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [criteria, setCriteria] = useState({ priority: "", complexity: "", tags: "" });
+  const [customCriteria, setCustomCriteria] = useState("");
 
   const handleCriteriaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -52,7 +53,7 @@ export function AddFeatureFlow({ repoId, onClose }: AddFeatureFlowProps) {
     setError(null);
     setStep({ type: "loading-placement" });
     try {
-      const result = await suggestPlacement(repoId, description.trim());
+      const result = await suggestPlacement(repoId, description.trim(), criteria, customCriteria);
       setStep({ type: "placement", candidates: result.candidates });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to find placement");
@@ -64,7 +65,7 @@ export function AddFeatureFlow({ repoId, onClose }: AddFeatureFlowProps) {
     setError(null);
     setStep({ type: "loading-suggestion", candidateNodeId: candidate.node_id, candidateName: candidate.node_name });
     try {
-      const suggestion = await createSuggestion(repoId, candidate.node_id, description.trim());
+      const suggestion = await createSuggestion(repoId, candidate.node_id, description.trim(), criteria, customCriteria);
       setStep({ type: "confirm", suggestion, parentNodeId: candidate.node_id });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create suggestion");
@@ -143,6 +144,16 @@ export function AddFeatureFlow({ repoId, onClose }: AddFeatureFlowProps) {
                 className="w-full rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-1 focus:ring-primary"
               />
               <div className="space-y-2">
+                <div>
+                  <label htmlFor="criteria">Custom Criteria:</label>
+                  <input
+                    type="text"
+                    id="criteria"
+                    value={customCriteria}
+                    onChange={(e) => setCustomCriteria(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
                 <div>
                   <label htmlFor="priority" className="block text-xs text-muted-foreground mb-1">Priority</label>
                   <input id="priority" name="priority" value={criteria.priority} onChange={handleCriteriaChange} className="w-full rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
@@ -252,3 +263,5 @@ export function AddFeatureFlow({ repoId, onClose }: AddFeatureFlowProps) {
     </div>
   );
 }
+
+export default AddFeatureFlow;
