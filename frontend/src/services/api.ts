@@ -240,3 +240,14 @@ export async function getExecutionLogs(
 ): Promise<ExecutionLog[]> {
   return fetchJSON<ExecutionLog[]>(`/api/execution/${runId}/logs`);
 }
+
+export async function submitPlanFeedback(
+  runId: string,
+  rating: "positive" | "negative",
+  comment?: string
+): Promise<ExecutionRun> {
+  return fetchJSON<ExecutionRun>(`/api/execution/${runId}/plan-feedback`, {
+    method: "POST",
+    body: JSON.stringify({ rating, comment: comment ?? null }),
+  });
+}

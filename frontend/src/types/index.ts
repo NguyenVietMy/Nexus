@@ -82,6 +82,8 @@ export interface ExecutionRun {
   pr_url: string | null;
   pr_merged: boolean;
   plan_md: string | null;
+  plan_feedback_rating?: string | null;
+  plan_feedback_comment?: string | null;
   iteration_count: number;
   started_at: string | null;
   completed_at: string | null;

@@ -11,6 +11,11 @@ class UpdatePlanRequest(BaseModel):
     plan_md: str
 
 
+class PlanFeedbackRequest(BaseModel):
+    rating: str  # "positive" | "negative"
+    comment: str | None = None
+
+
 class ExecutionRunResponse(BaseModel):
     id: str
     feature_suggestion_id: str
@@ -21,6 +26,8 @@ class ExecutionRunResponse(BaseModel):
     pr_url: str | None = None
     pr_merged: bool = False
     plan_md: str | None = None
+    plan_feedback_rating: str | None = None
+    plan_feedback_comment: str | None = None
     iteration_count: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None

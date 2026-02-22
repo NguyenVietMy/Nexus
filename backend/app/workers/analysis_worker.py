@@ -240,6 +240,22 @@ async def run_plan_phase(
         ).eq("id", execution_run_id).execute()
 
 
+async def run_regenerate_plan_with_feedback(
+    execution_run_id: str, openai_api_key: str | None = None
+) -> None:
+    """Background task: regenerate plan integrating user feedback (same _generate_plan, feedback in user msg)."""
+    try:
+        from app.services.execution_service import regenerate_plan_with_feedback
+
+        await regenerate_plan_with_feedback(execution_run_id, api_key=openai_api_key)
+    except Exception as e:
+        logger.exception(f"Regenerate plan failed for run {execution_run_id}: {e}")
+        db = get_supabase()
+        db.table("execution_runs").update(
+            {"status": "failed"}
+        ).eq("id", execution_run_id).execute()
+
+
 async def run_build_phase(execution_run_id: str) -> None:
     """Background task: run build phase after user approval."""
     try:

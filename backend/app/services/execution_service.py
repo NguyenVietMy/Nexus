@@ -176,6 +176,10 @@ async def _generate_plan(
     file_tree: list[str],
     test_file_ref: str = "",
     api_key: str | None = None,
+    *,
+    previous_plan: str | None = None,
+    feedback_rating: str | None = None,
+    feedback_comment: str | None = None,
 ) -> ImplementationPlan:
     """Generate a Plan.md and test file via a single OpenAI call.
 
@@ -185,6 +189,10 @@ async def _generate_plan(
     (e.g. "tests/test_my-feature.py"), so the plan and test code are
     coherent and Claude Code knows exactly which file to run for verification.
     Returns an ImplementationPlan with both 'plan' and 'test_code' fields.
+
+    When previous_plan and feedback are provided, the same system prompt is used
+    and the user message is extended so the model can generate a new plan that
+    integrates the feedback. The core plan-generation rules are unchanged.
     """
     test_instruction = (
         f"\n\nThe test file for this feature will be placed at `{test_file_ref}`. "
@@ -244,6 +252,20 @@ async def _generate_plan(
         f"Test cases: {json.dumps(suggestion.get('test_cases', []))}\n\n"
         f"Repository file tree ({len(file_tree)} files):\n{tree_str}"
     )
+
+    if previous_plan and (feedback_rating or feedback_comment):
+        feedback_parts = [f"User feedback rating: {feedback_rating or 'not given'}."]
+        if feedback_comment and feedback_comment.strip():
+            feedback_parts.append(f"User comment: {feedback_comment.strip()}")
+        user_content += (
+            "\n\n--- User feedback on the previous plan ---\n"
+            + "\n".join(feedback_parts)
+            + "\n\nPrevious plan (for reference):\n\n"
+            + previous_plan[:12000]
+            + ("\n... (truncated)" if len(previous_plan) > 12000 else "")
+            + "\n\n---\nGenerate a NEW implementation plan (and test_code) that addresses the user's feedback. "
+            "Keep the same feature and repository context; only the plan content should change."
+        )
 
     return await call_llm_structured(
         system_prompt=system_prompt,
@@ -819,6 +841,75 @@ async def execute_plan_phase(execution_run_id: str) -> None:
 
     except Exception as e:
         logger.exception(f"Plan phase failed for {execution_run_id}: {e}")
+        _update_status(execution_run_id, "failed")
+        _log(execution_run_id, "error", str(e), level="error")
+
+
+async def regenerate_plan_with_feedback(
+    execution_run_id: str,
+    api_key: str | None = None,
+) -> None:
+    """Regenerate the plan using the same _generate_plan with user feedback appended.
+
+    Run must be planning or awaiting_approval (router sets planning before enqueueing)
+    with sandbox_path, plan_md, and plan_feedback_* set.
+    Updates plan_md and clears feedback so the user can submit again on the new plan.
+    """
+    db = get_supabase()
+    exec_run = db.table("execution_runs").select("*").eq("id", execution_run_id).execute()
+    if not exec_run.data:
+        raise ValueError(f"Execution run {execution_run_id} not found")
+    run = exec_run.data[0]
+    if run.get("status") not in ("awaiting_approval", "planning"):
+        raise ValueError(f"Run must be awaiting_approval or planning, got {run.get('status')}")
+    sandbox_path = run.get("sandbox_path")
+    if not sandbox_path or not Path(sandbox_path).exists():
+        _update_status(execution_run_id, "failed")
+        _log(execution_run_id, "error", "Sandbox missing; cannot regenerate plan.", level="error")
+        return
+    suggestion = db.table("feature_suggestions").select("*").eq("id", run["feature_suggestion_id"]).execute().data[0]
+    feature_slug = _slugify(suggestion["name"])
+    file_tree = _walk_sandbox_tree(sandbox_path)
+    language = _detect_feature_language(suggestion.get("impacted_files", []), file_tree)
+    feature_test_ref = _test_file_ref(language, feature_slug)
+
+    _update_status(execution_run_id, "planning")
+    _log(execution_run_id, "plan", "Regenerating plan with user feedback via OpenAI")
+
+    try:
+        plan_result = await _generate_plan(
+            suggestion,
+            file_tree,
+            test_file_ref=feature_test_ref,
+            api_key=api_key,
+            previous_plan=run.get("plan_md") or "",
+            feedback_rating=run.get("plan_feedback_rating"),
+            feedback_comment=run.get("plan_feedback_comment"),
+        )
+        plan = plan_result.plan
+        test_code = plan_result.test_code or ""
+
+        plan_path = Path(sandbox_path) / "Plan.md"
+        plan_path.write_text(plan, encoding="utf-8")
+        _log(execution_run_id, "plan", "Plan.md updated from feedback")
+
+        test_path = Path(sandbox_path) / feature_test_ref
+        test_path.parent.mkdir(parents=True, exist_ok=True)
+        if test_code.strip():
+            test_path.write_text(test_code, encoding="utf-8")
+            _log(execution_run_id, "tests", f"Test file updated: {test_path.name}")
+
+        _update_status(
+            execution_run_id,
+            "awaiting_approval",
+            plan_md=plan,
+            plan_feedback_rating=None,
+            plan_feedback_comment=None,
+        )
+        _log(execution_run_id, "plan", "Plan updated from feedback. Awaiting approval.")
+        logger.info(f"Plan regenerated with feedback for {execution_run_id}")
+    except Exception as e:
+        logger.exception(f"Regenerate plan failed for {execution_run_id}: {e}")
         _update_status(execution_run_id, "failed")
         _log(execution_run_id, "error", str(e), level="error")
 

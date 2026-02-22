@@ -9,6 +9,7 @@ import {
   updatePlan,
   abandonExecution,
   markPrMerged,
+  submitPlanFeedback,
 } from "@/services/api";
 import type { ExecutionRun, ExecutionLog, ExecutionStatus } from "@/types";
 
@@ -98,6 +99,9 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [editingPlan, setEditingPlan] = useState(false);
   const [editedPlan, setEditedPlan] = useState("");
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackRating, setFeedbackRating] = useState<"positive" | "negative" | null>(null);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [savingPlan, setSavingPlan] = useState(false);
@@ -264,6 +268,23 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
     setEditedPlan(run?.plan_md ?? "");
   }, [run?.plan_md]);
 
+  const handleSubmitFeedback = useCallback(async () => {
+    if (!runId || feedbackSubmitting || !feedbackRating) return;
+    setFeedbackSubmitting(true);
+    try {
+      const updated = await submitPlanFeedback(
+        runId,
+        feedbackRating,
+        feedbackComment.trim() || undefined
+      );
+      setRun(updated);
+      setFeedbackRating(null);
+      setFeedbackComment("");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  }, [runId, feedbackRating, feedbackComment, feedbackSubmitting]);
+
   const phase = run ? getPhase(run.status) : "planning";
   const isFailed = phase === "failed";
   const isDone = phase === "done";
@@ -407,15 +428,24 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
                   {/* Status badge */}
                   <div className="mb-4 flex items-center gap-2">
                     <h3 className="text-sm font-semibold">Implementation Plan</h3>
-                    {phase === "approval" ? (
+                    {phase === "planning" && run.plan_md ? (
+                      <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                        Regenerating plan with your feedback…
+                      </span>
+                    ) : phase === "approval" ? (
                       <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
                         Awaiting approval
                       </span>
-                    ) : (
+                    ) : phase === "failed" ? (
+                      <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-400">
+                        Build failed
+                      </span>
+                    ) : phase === "building" || phase === "done" ? (
                       <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
                         Approved
                       </span>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* Plan content */}
@@ -493,6 +523,60 @@ export function ExecutionModal({ runId, onClose }: ExecutionModalProps) {
                           Edit Plan
                         </button>
                       )}
+                    </div>
+                  )}
+
+                  {/* Plan feedback: submit sends feedback and triggers plan regeneration */}
+                  {!editingPlan && run.plan_md && phase === "approval" && (
+                    <div className="mt-4 pt-4 border-t border-border">
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Was this plan helpful? Add feedback and submit to get a new plan that integrates it.
+                      </p>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => setFeedbackRating("positive")}
+                            disabled={feedbackSubmitting}
+                            className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                              feedbackRating === "positive"
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border bg-background text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                            } disabled:opacity-50`}
+                            aria-label="Yes, helpful"
+                          >
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFeedbackRating("negative")}
+                            disabled={feedbackSubmitting}
+                            className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                              feedbackRating === "negative"
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border bg-background text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                            } disabled:opacity-50`}
+                            aria-label="No, not helpful"
+                          >
+                            No
+                          </button>
+                        </div>
+                        <input
+                          type="text"
+                          value={feedbackComment}
+                          onChange={(e) => setFeedbackComment(e.target.value)}
+                          placeholder="Optional comment (e.g. what to change)"
+                          className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSubmitFeedback}
+                          disabled={feedbackSubmitting || !feedbackRating}
+                          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors w-fit"
+                        >
+                          {feedbackSubmitting ? "Submitting…" : "Submit & generate new plan"}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </>
