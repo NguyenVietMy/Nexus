@@ -173,14 +173,27 @@ async def _clone_to_sandbox(
 async def _generate_plan(
     suggestion: dict,
     file_tree: list[str],
+    test_file_ref: str = "",
     api_key: str | None = None,
 ) -> ImplementationPlan:
     """Generate a Plan.md and test file via a single OpenAI call.
 
     file_tree is the live recursive file listing of the cloned sandbox,
     giving the LLM direct evidence of the project's language and structure.
+    test_file_ref is the pre-computed path where the test file will live
+    (e.g. "tests/test_my-feature.py"), so the plan and test code are
+    coherent and Claude Code knows exactly which file to run for verification.
     Returns an ImplementationPlan with both 'plan' and 'test_code' fields.
     """
+    test_instruction = (
+        f"\n\nThe test file for this feature will be placed at `{test_file_ref}`. "
+        f"Your Plan.md MUST reference this exact path as the verification step "
+        f"(e.g. 'run pytest {test_file_ref}'). "
+        f"Do NOT include a step to create or move a test file — it will already exist. "
+        f"Write your test_code to match the source-level functions/classes you plan to create."
+        if test_file_ref else ""
+    )
+
     system_prompt = (
         "You are a senior engineer writing an implementation plan for an AI coding agent. "
         "You are given the complete file tree of the repository. "
@@ -192,16 +205,20 @@ async def _generate_plan(
         "explore the codebase freely — it must follow your plan without reading any other files. "
         "Therefore your plan MUST include:\n"
         "- Feature name and description\n"
-        "- Exact list of files to create or modify (full relative paths)\n"
+        "- Exact list of SOURCE files to create or modify (full relative paths, no test files)\n"
         "- For each file: the specific functions/classes/lines to add or change, "
-        "with concrete code snippets where possible\n"
+        "with concrete code snippets\n"
         "- Exact import statements to add\n"
         "- Step-by-step instructions the agent can execute top-to-bottom without guessing\n"
+        "- A final verification step: run the test file to confirm the implementation\n"
         "- Constraints: do NOT modify .env, CI configs, or deployment configs\n"
         "- Max 25 files changed\n\n"
-        "Also write a complete test file for the feature using the testing framework already "
-        "present in the repo (infer it from the file tree — e.g. pytest for .py, JUnit for .java, "
-        "Jest/Vitest for .ts/.tsx). Do not invent a framework not already in the repo.\n\n"
+        "Also write a complete test file for the feature. "
+        "Use the testing framework already present in the repo "
+        "(infer it from the file tree — e.g. pytest for .py, JUnit for .java, Jest/Vitest for .ts/.tsx). "
+        "The test_code MUST only test functions/classes that your plan actually creates or modifies — "
+        "do NOT reference invented function names that don't exist in your plan."
+        + test_instruction + "\n\n"
         "Return a JSON object with key 'plan' containing the markdown plan text "
         "and key 'test_code' containing the full test file contents."
     )
@@ -744,11 +761,18 @@ async def execute_plan_phase(execution_run_id: str) -> None:
         file_tree = _walk_sandbox_tree(sandbox_path)
         _log(execution_run_id, "plan", f"Scanned {len(file_tree)} files in sandbox")
 
+        # Detect language and test path BEFORE plan generation so OpenAI knows
+        # exactly where the test file lives and can reference it in Plan.md
+        language = _detect_feature_language(
+            suggestion.get("impacted_files", []), file_tree
+        )
+        feature_test_ref = _test_file_ref(language, feature_slug)
+
         # ---- Step 2: Generate plan + tests (single OpenAI call) ----
         _update_status(execution_run_id, "planning")
         _log(execution_run_id, "plan", "Generating implementation plan and tests via OpenAI")
 
-        plan_result = await _generate_plan(suggestion, file_tree)
+        plan_result = await _generate_plan(suggestion, file_tree, test_file_ref=feature_test_ref)
         plan = plan_result.plan
         test_code = plan_result.test_code or ""
 
@@ -757,12 +781,9 @@ async def execute_plan_phase(execution_run_id: str) -> None:
         plan_path.write_text(plan, encoding="utf-8")
         _log(execution_run_id, "plan", "Plan.md written to sandbox")
 
-        # Detect language and write test file
+        # Write test file
         _update_status(execution_run_id, "testing")
-        language = _detect_feature_language(
-            suggestion.get("impacted_files", []), file_tree
-        )
-        test_path = Path(sandbox_path) / _test_file_ref(language, feature_slug)
+        test_path = Path(sandbox_path) / feature_test_ref
         test_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not test_code.strip():
