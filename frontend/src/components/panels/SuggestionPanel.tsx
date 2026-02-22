@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { buildFeature } from "@/services/api";
-import { fetchSuggestionsWithCriteria } from "@/services/api";
+import { buildFeature, fetchSuggestionsWithCriteria, api } from "@/services/api";
 import type { FeatureSuggestion } from "@/types";
 import { ExecutionModal } from "@/components/modals/ExecutionModal";
 
@@ -37,6 +36,13 @@ export function SuggestionPanel({
   const [building, setBuilding] = useState<string | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [criteriaSuggestions, setCriteriaSuggestions] = useState<{ id: string; text: string }[]>([]);
+  const [fetchedSuggestions, setFetchedSuggestions] = useState<Array<{ id: number | string; name: string }> | null>(null);
+
+  useEffect(() => {
+    api.fetchSuggestions({ type: 'enhancement' }).then((data) => {
+      setFetchedSuggestions(data as Array<{ id: number | string; name: string }>);
+    });
+  }, []);
 
   useEffect(() => {
     if (criteria) {
@@ -60,6 +66,19 @@ export function SuggestionPanel({
       setBuilding(null);
     }
   };
+
+  if (!criteria && !externalSuggestions) {
+    if (fetchedSuggestions === null) {
+      return <div />;
+    }
+    return (
+      <div>
+        {fetchedSuggestions.map((s) => (
+          <div key={s.id}>{s.name}</div>
+        ))}
+      </div>
+    );
+  }
 
   if (criteria) {
     return (
@@ -210,3 +229,5 @@ export function SuggestionPanel({
     </div>
   );
 }
+
+export default SuggestionPanel;

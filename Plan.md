@@ -1,130 +1,95 @@
 # Implementation Plan for Customizable Suggestion Criteria
 
 ## Feature Description
-The goal is to enable users to customize the criteria for suggestion generation, allowing the tool to be more adaptable to different project requirements and user preferences. This will involve both backend and frontend changes.
+The feature "Customizable Suggestion Criteria" allows users to set and customize criteria that will be used during suggestion generation. This enhances the adaptability of the tool to different project needs and user preferences.
 
 ## Source Files to Modify
+1. `backend/app/services/suggestion_service.py`
+2. `frontend/src/components/modals/AddFeatureFlow.tsx`
+3. `frontend/src/components/panels/SuggestionPanel.tsx`
 
-1. **Backend**
-   - `backend/app/services/suggestion_service.py`
-   - `backend/app/schemas/features.py`
+## Detailed Steps
 
-2. **Frontend**
-   - `frontend/src/components/modals/AddFeatureFlow.tsx`
-   - `frontend/src/components/panels/SuggestionPanel.tsx`
+### 1. Update Backend Suggestion Service
 
-## Backend Changes
+**File:** `backend/app/services/suggestion_service.py`
 
-### Modify `suggestion_service.py`
-
-- **File**: `backend/app/services/suggestion_service.py`
-  
-  Add a new method to handle custom suggestion criteria:
+- **Add a new method** to process custom criteria:
   
   ```python
-  def generate_suggestions_with_criteria(self, criteria: dict):
-      """
-      Generate suggestions based on custom criteria.
+  def apply_custom_criteria(self, suggestions, criteria):
+      # Example logic to filter suggestions based on criteria
+      filtered_suggestions = [s for s in suggestions if self._matches_criteria(s, criteria)]
+      return filtered_suggestions
 
-      :param criteria: A dictionary of criteria to customize suggestions
-      :return: A list of suggestions
-      """
-      # Logic to apply custom criteria
-      # This is a placeholder implementation
-      suggestions = self.base_suggestions()
-      customized_suggestions = [s for s in suggestions if s.meets_criteria(criteria)]
-      return customized_suggestions
+  def _matches_criteria(self, suggestion, criteria):
+      # Define logic to match suggestion with criteria
+      return all(getattr(suggestion, key, None) == value for key, value in criteria.items())
   ```
 
-### Modify `features.py`
-
-- **File**: `backend/app/schemas/features.py`
-
-  Add a new schema for custom suggestion criteria:
+- **Modify existing suggestion generation method** to incorporate the new criteria:
 
   ```python
-  from pydantic import BaseModel
-
-  class SuggestionCriteria(BaseModel):
-      # Define customizable criteria fields
-      priority: str
-      complexity: str
-      tags: list[str]
+  def generate_suggestions(self, base_criteria, custom_criteria=None):
+      suggestions = self._generate_base_suggestions(base_criteria)
+      if custom_criteria:
+          suggestions = self.apply_custom_criteria(suggestions, custom_criteria)
+      return suggestions
   ```
 
-## Frontend Changes
+### 2. Update AddFeatureFlow UI Component
 
-### Modify `AddFeatureFlow.tsx`
+**File:** `frontend/src/components/modals/AddFeatureFlow.tsx`
 
-- **File**: `frontend/src/components/modals/AddFeatureFlow.tsx`
+- **Import necessary hooks and components**:
 
-  Add a UI component to capture custom suggestion criteria:
-  
-  ```tsx
-  import React, { useState } from 'react';
-
-  export const AddFeatureFlow = () => {
-      const [criteria, setCriteria] = useState({ priority: '', complexity: '', tags: [] });
-
-      const handleCriteriaChange = (e) => {
-          const { name, value } = e.target;
-          setCriteria(prev => ({ ...prev, [name]: value }));
-      };
-
-      return (
-          <div>
-              {/* Existing UI components */}
-              <div>
-                  <label>Priority: </label>
-                  <input name="priority" value={criteria.priority} onChange={handleCriteriaChange} />
-              </div>
-              <div>
-                  <label>Complexity: </label>
-                  <input name="complexity" value={criteria.complexity} onChange={handleCriteriaChange} />
-              </div>
-              <div>
-                  <label>Tags: </label>
-                  <input name="tags" value={criteria.tags.join(',')} onChange={handleCriteriaChange} />
-              </div>
-          </div>
-      );
-  };
+  ```typescript
+  import { useState } from 'react';
+  import { CriteriaForm } from '../forms/CriteriaForm';
   ```
 
-### Modify `SuggestionPanel.tsx`
+- **Add state to manage custom criteria**:
 
-- **File**: `frontend/src/components/panels/SuggestionPanel.tsx`
+  ```typescript
+  const [customCriteria, setCustomCriteria] = useState({});
+  ```
 
-  Modify the component to apply custom criteria for suggestions:
-  
-  ```tsx
+- **Render a new form component** for setting criteria:
+
+  ```typescript
+  <CriteriaForm criteria={customCriteria} setCriteria={setCustomCriteria} />
+  ```
+
+### 3. Update SuggestionPanel to Use Custom Criteria
+
+**File:** `frontend/src/components/panels/SuggestionPanel.tsx`
+
+- **Import necessary hooks**:
+
+  ```typescript
   import { useEffect, useState } from 'react';
-  import api from '../../services/api';
-
-  export const SuggestionPanel = ({ criteria }) => {
-      const [suggestions, setSuggestions] = useState([]);
-
-      useEffect(() => {
-          api.fetchSuggestionsWithCriteria(criteria).then(setSuggestions);
-      }, [criteria]);
-
-      return (
-          <div>
-              {/* Render suggestions */}
-              {suggestions.map(suggestion => (
-                  <div key={suggestion.id}>{suggestion.text}</div>
-              ))}
-          </div>
-      );
-  };
+  import { api } from '../../services/api';
   ```
 
-## Final Verification Step
+- **Add logic to fetch suggestions with custom criteria**:
+
+  ```typescript
+  const [suggestions, setSuggestions] = useState([]);
+  const [customCriteria, setCustomCriteria] = useState({});
+
+  useEffect(() => {
+      api.fetchSuggestions(customCriteria).then(setSuggestions);
+  }, [customCriteria]);
+  ```
+
+## Final Verification
 Run the test file to confirm the implementation:
 
-```sh
-run jest __tests__/customizable-suggestion-criteria.test.ts
+```
+# Test the functionality by running the following command
+npm test -- __tests__/customizable-suggestion-criteria.test.ts
 ```
 
 ## Constraints
-- Do not modify `.env`, CI configs, or deployment configs.
+- Do not modify any environment files or deployment configurations.
+

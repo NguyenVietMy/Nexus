@@ -177,6 +177,17 @@ export async function startNewPlan(repoId: string): Promise<{ conversation_id: s
   return fetchJSON(`/api/repos/${repoId}/plan/new`, { method: "POST" });
 }
 
+// ---- API object for mocking ----
+
+export const api = {
+  fetchSuggestions: async (criteria: Record<string, unknown>): Promise<unknown[]> => {
+    return fetchJSON<unknown[]>(`/api/suggestions`, {
+      method: "POST",
+      body: JSON.stringify(criteria),
+    });
+  },
+};
+
 // ---- Criteria-based Suggestions ----
 
 export async function fetchSuggestionsWithCriteria(
