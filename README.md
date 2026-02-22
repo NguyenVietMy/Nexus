@@ -1,4 +1,4 @@
-# Product Evolution Engine
+# Nexus
 
 AI-native developer tool that analyzes GitHub repositories, visualizes feature topology, suggests expansions, simulates strategic futures, and auto-builds features using Claude Code.
 
