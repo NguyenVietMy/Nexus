@@ -711,6 +711,62 @@ async def _run_verification(
 
 
 # ---------------------------------------------------------------------------
+# Step 4b: Journey simulation — fix wiring gaps after verification passes
+# ---------------------------------------------------------------------------
+
+
+async def _run_journey_simulation(
+    sandbox_path: str,
+    plan_md: str,
+    suggestion: dict,
+    run_id: str,
+) -> None:
+    """Trace the user journey for the implemented feature and fix any broken wiring.
+
+    Runs after verification passes. Claude is given the feature description, the plan,
+    and the list of changed files, then asked to simulate a user using the feature and
+    fix any broken connections it finds (missing routes, unthreaded props, response
+    shape mismatches, disconnected data flow, etc.).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=sandbox_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        changed_files = result.stdout.strip() or "(no changes detected)"
+    except Exception:
+        changed_files = "(could not determine changed files)"
+
+    feature_name = suggestion.get("name", "the feature")
+    feature_desc = suggestion.get("rationale", suggestion.get("description", ""))
+
+    prompt = (
+        f"You have just implemented: {feature_name}\n"
+        f"Feature description: {feature_desc}\n\n"
+        f"The plan you followed:\n{plan_md}\n\n"
+        f"Files changed in this implementation:\n{changed_files}\n\n"
+        f"Now perform a USER JOURNEY SIMULATION:\n"
+        f"1. Imagine a real user trying to use this feature right now\n"
+        f"2. Trace the complete path end-to-end: UI interaction → state update → API call → "
+        f"route handler → service function → database → response → UI update\n"
+        f"3. At each step, read the relevant code and verify the connection to the next step exists\n"
+        f"4. Fix every broken connection you find\n\n"
+        f"IMPORTANT CONSTRAINTS:\n"
+        f"- Fix broken connections ONLY — do not refactor or improve working code\n"
+        f"- Do NOT add new features beyond what the plan describes\n"
+        f"- Do NOT modify .env, CI configs, or deployment configs\n"
+        f"- Do NOT use the Task tool to spawn subagents\n"
+        f"- Max 10 additional files changed"
+    )
+
+    _log(run_id, "build", "Running user journey simulation to fix wiring gaps")
+    await _invoke_claude_code(sandbox_path, prompt, run_id)
+
+
+# ---------------------------------------------------------------------------
 # Step 5: Commit, push, open PR
 # ---------------------------------------------------------------------------
 
@@ -1022,6 +1078,10 @@ async def execute_build_phase(execution_run_id: str) -> None:
             _update_status(execution_run_id, "failed")
             _log(execution_run_id, "done", f"Failed after {max_iterations + 1} attempts", level="error")
             return
+
+        # ---- Journey simulation: fix wiring gaps ----
+        _update_status(execution_run_id, "building")
+        await _run_journey_simulation(sandbox_path, plan, suggestion, execution_run_id)
 
         # ---- Commit, push, open PR ----
         _update_status(execution_run_id, "pushing")
