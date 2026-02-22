@@ -553,6 +553,17 @@ async def _invoke_claude_code(
         if stderr_text:
             _log(run_id, "claude_code", stderr_text[:2000], level="warn")
 
+        # Extract Claude's final result text from the result event
+        result_text = ""
+        for raw_line in stdout_text.splitlines():
+            try:
+                event = json.loads(raw_line)
+                if event.get("type") == "result":
+                    result_text = event.get("result", "")
+                    break
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
         if returncode != 0:
             _log(
                 run_id,
@@ -560,9 +571,9 @@ async def _invoke_claude_code(
                 f"Exit code {returncode}",
                 level="error",
             )
-            return False
+            return False, result_text
 
-        return True
+        return True, result_text
 
     except asyncio.TimeoutError:
         _log(
@@ -571,7 +582,7 @@ async def _invoke_claude_code(
             f"Claude Code timed out after {timeout}s",
             level="error",
         )
-        return False
+        return False, ""
     except FileNotFoundError as e:
         _log(
             run_id,
@@ -580,7 +591,7 @@ async def _invoke_claude_code(
             "Install via https://claude.ai/download or ensure 'claude' is in PATH.",
             level="error",
         )
-        return False
+        return False, ""
     except subprocess.TimeoutExpired:
         _log(
             run_id,
@@ -588,7 +599,7 @@ async def _invoke_claude_code(
             f"Claude Code timed out after {timeout}s",
             level="error",
         )
-        return False
+        return False, ""
     except Exception as e:
         _log(
             run_id,
@@ -597,7 +608,7 @@ async def _invoke_claude_code(
             level="error",
         )
         logger.exception("Claude Code invocation failed")
-        return False
+        return False, ""
 
 
 # ---------------------------------------------------------------------------
@@ -743,27 +754,50 @@ async def _run_journey_simulation(
     feature_name = suggestion.get("name", "the feature")
     feature_desc = suggestion.get("rationale", suggestion.get("description", ""))
 
-    prompt = (
-        f"You have just implemented: {feature_name}\n"
-        f"Feature description: {feature_desc}\n\n"
-        f"The plan you followed:\n{plan_md}\n\n"
-        f"Files changed in this implementation:\n{changed_files}\n\n"
-        f"Now perform a USER JOURNEY SIMULATION:\n"
-        f"1. Imagine a real user trying to use this feature right now\n"
-        f"2. Trace the complete path end-to-end: UI interaction → state update → API call → "
-        f"route handler → service function → database → response → UI update\n"
-        f"3. At each step, read the relevant code and verify the connection to the next step exists\n"
-        f"4. Fix every broken connection you find\n\n"
-        f"IMPORTANT CONSTRAINTS:\n"
-        f"- Fix broken connections ONLY — do not refactor or improve working code\n"
-        f"- Do NOT add new features beyond what the plan describes\n"
-        f"- Do NOT modify .env, CI configs, or deployment configs\n"
-        f"- Do NOT use the Task tool to spawn subagents\n"
-        f"- Max 10 additional files changed"
+    # ---- Phase 1: Diagnose (read-only) ----
+    diagnose_prompt = (
+        f"You just implemented: {feature_name}\n"
+        f"Files changed:\n{changed_files}\n\n"
+        f"TASK: Read the changed files and trace the complete user journey for this feature "
+        f"end-to-end: UI interaction → state → API call → route handler → service → "
+        f"database → response → UI update.\n\n"
+        f"For each step in the journey, check whether the code connection to the next step "
+        f"actually exists in the codebase.\n\n"
+        f"Output a numbered list of every broken connection you find.\n"
+        f"If you find no broken connections, output exactly: NO GAPS FOUND\n\n"
+        f"RULES:\n"
+        f"- Read files only. Do NOT edit anything.\n"
+        f"- Do NOT run any commands.\n"
+        f"- Do NOT use the Task tool."
     )
 
-    _log(run_id, "build", "Running user journey simulation to fix wiring gaps")
-    await _invoke_claude_code(sandbox_path, prompt, run_id)
+    _log(run_id, "build", "Wiring check — diagnosing gaps")
+    _, gap_list = await _invoke_claude_code(sandbox_path, diagnose_prompt, run_id)
+
+    if not gap_list or "NO GAPS FOUND" in gap_list.upper():
+        _log(run_id, "build", "Wiring check — no gaps found")
+        return
+
+    _log(run_id, "build", f"Wiring check — gaps found:\n{gap_list}")
+
+    # ---- Phase 2: Fix (scoped to diagnosed gaps only) ----
+    fix_prompt = (
+        f"The implementation of '{feature_name}' has the following wiring gaps:\n\n"
+        f"{gap_list}\n\n"
+        f"Fix each gap listed above. Nothing else.\n\n"
+        f"RULES:\n"
+        f"- Fix only what is listed above. Do not fix, improve, or touch anything not listed.\n"
+        f"- Only add missing connections: imports, route registrations, prop passing, "
+        f"shape alignment between caller and receiver.\n"
+        f"- Do NOT rewrite existing logic.\n"
+        f"- Do NOT run tests or any commands.\n"
+        f"- Do NOT modify .env, CI configs, or deployment configs.\n"
+        f"- Do NOT use the Task tool.\n"
+        f"- Max 5 files changed."
+    )
+
+    _log(run_id, "build", "Wiring check — fixing gaps")
+    await _invoke_claude_code(sandbox_path, fix_prompt, run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1054,7 +1088,7 @@ async def execute_build_phase(execution_run_id: str) -> None:
                 )
 
             _log(execution_run_id, "build", f"Invoking Claude Code (iteration {iteration})")
-            claude_ok = await _invoke_claude_code(sandbox_path, prompt, execution_run_id)
+            claude_ok, _ = await _invoke_claude_code(sandbox_path, prompt, execution_run_id)
 
             if not claude_ok:
                 _log(execution_run_id, "build", f"Claude Code returned non-zero (iteration {iteration})", level="warn")
@@ -1228,7 +1262,7 @@ async def retry_build_phase(execution_run_id: str) -> None:
             _update_status(execution_run_id, "building", iteration_count=iteration)
             _log(execution_run_id, "build", f"Invoking Claude Code (retry iteration {iteration})")
 
-            claude_ok = await _invoke_claude_code(sandbox_path, prompt, execution_run_id)
+            claude_ok, _ = await _invoke_claude_code(sandbox_path, prompt, execution_run_id)
 
             if not claude_ok:
                 _log(execution_run_id, "build", f"Claude Code returned non-zero (iteration {iteration})", level="warn")
