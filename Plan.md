@@ -1,101 +1,131 @@
-# Implementation Plan for Customizable Suggestion Criteria
+## Feature: Plan Templates
 
-## Feature Description
+### Description:
+Enhance the application by providing users with predefined templates for common implementation plans. This feature aims to reduce setup time and ensure adherence to best practices by allowing users to select and modify these templates when generating a new plan.
 
-The feature "Customizable Suggestion Criteria" aims to allow users to define and customize criteria for generating suggestions. This flexibility allows the tool to adapt to different project needs and user preferences. The implementation involves both frontend and backend changes to facilitate the creation, application, and storage of custom criteria.
+### Source Files to Modify:
+1. **backend/app/services/plan_service.py**
+   - Add a list of predefined plan templates.
+   - Create functions to retrieve and manipulate these templates.
 
-## Source Files to Modify or Create
+2. **frontend/src/components/modals/ExecutionModal.tsx**
+   - Update UI to display available plan templates.
+   - Allow selection and customization of a template.
 
-1. **Backend Modification:**
-   - Modify `backend/app/services/suggestion_service.py`
+3. **frontend/src/components/panels/PlanPanel.tsx**
+   - Display the selected template and provide options to edit it.
 
-2. **Frontend Modifications:**
-   - Modify `frontend/src/components/modals/AddFeatureFlow.tsx`
-   - Modify `frontend/src/components/panels/SuggestionPanel.tsx`
+### Modifications:
 
-## Detailed Instructions
+#### 1. Modify `backend/app/services/plan_service.py`
 
-### 1. Backend Modifications
-
-#### File: `backend/app/services/suggestion_service.py`
-
-- **Import Statements**: Ensure the following import is present
+- **Add Import:**
   ```python
   from typing import List, Dict
   ```
 
-- **Modify Function:** Update or create a function in `SuggestionService` to handle custom criteria.
+- **Add Predefined Templates:** Add a list of predefined templates.
   ```python
-  def generate_suggestions_with_criteria(self, criteria: Dict[str, any]) -> List[str]:
-      # Use the criteria to filter or adjust the suggestion generation logic
-      suggestions = []
-      # Example: pseudo-logic to adjust filtering
-      for suggestion in self.all_suggestions():
-          if self.meets_criteria(suggestion, criteria):
-              suggestions.append(suggestion)
-      return suggestions
-
-  def meets_criteria(self, suggestion: str, criteria: Dict[str, any]) -> bool:
-      # Implement custom filtering logic
-      return True  # Placeholder for actual logic
+  PLAN_TEMPLATES = [
+      {
+          "name": "Basic Feature Implementation",
+          "description": "A basic plan for implementing a new feature.",
+          "steps": [
+              "Define the feature requirements.",
+              "Create the data model.",
+              "Develop the API endpoints.",
+              "Implement the frontend components.",
+              "Write tests and documentation."
+          ]
+      },
+      {
+          "name": "Bug Fix",
+          "description": "Steps to fix a bug in the application.",
+          "steps": [
+              "Identify the bug and reproduce it.",
+              "Debug the issue to find the root cause.",
+              "Apply the fix and test it locally.",
+              "Submit a pull request with tests."
+          ]
+      }
+  ]
   ```
 
-### 2. Frontend Modifications
-
-#### File: `frontend/src/components/modals/AddFeatureFlow.tsx`
-
-- **Modify Component:** Add a form or input fields to capture custom criteria from the user.
-  ```tsx
-  import { useState } from 'react';
-
-  const AddFeatureFlow = () => {
-      const [criteria, setCriteria] = useState({});
-
-      const handleCriteriaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-          const { name, value } = event.target;
-          setCriteria({ ...criteria, [name]: value });
-      };
-
-      return (
-          <div>
-              <input type="text" name="criterion1" onChange={handleCriteriaChange} />
-              <input type="text" name="criterion2" onChange={handleCriteriaChange} />
-          </div>
-      );
-  };
+- **Add Function to Get Templates:**
+  ```python
+  def get_plan_templates() -> List[Dict[str, any]]:
+      return PLAN_TEMPLATES
   ```
 
-#### File: `frontend/src/components/panels/SuggestionPanel.tsx`
+#### 2. Modify `frontend/src/components/modals/ExecutionModal.tsx`
 
-- **Modify Component:** Update the component to use the custom criteria when fetching suggestions.
-  ```tsx
-  import { useEffect, useState } from 'react';
-  import { generateSuggestionsWithCriteria } from '../../services/api';
+- **Add Import Statement:**
+  ```typescript
+  import { useState, useEffect } from 'react';
+  import { getPlanTemplates } from '../../services/api';
+  ```
 
-  const SuggestionPanel = ({ criteria }) => {
-      const [suggestions, setSuggestions] = useState([]);
+- **Fetch Templates on Component Mount:**
+  ```typescript
+  const [templates, setTemplates] = useState([]);
 
-      useEffect(() => {
-          generateSuggestionsWithCriteria(criteria).then(setSuggestions);
-      }, [criteria]);
+  useEffect(() => {
+      getPlanTemplates().then(setTemplates);
+  }, []);
+  ```
 
-      return (
-          <div>
-              {suggestions.map((suggestion, index) => (
-                  <div key={index}>{suggestion}</div>
+- **Display Templates in Modal:** Add a dropdown or list for selecting a template.
+  ```typescript
+  return (
+      <div>
+          <h2>Select a Plan Template</h2>
+          <ul>
+              {templates.map((template) => (
+                  <li key={template.name}>
+                      <h3>{template.name}</h3>
+                      <p>{template.description}</p>
+                  </li>
               ))}
-          </div>
-      );
-  };
+          </ul>
+      </div>
+  );
   ```
 
-## Verification Step
-- Run the following test to verify the implementation:
-  ```shell
-  npm test __tests__/customizable-suggestion-criteria.test.ts
+#### 3. Modify `frontend/src/components/panels/PlanPanel.tsx`
+
+- **Add Import Statement:**
+  ```typescript
+  import { useState } from 'react';
   ```
 
-## Constraints
-- Do not modify `.env`, CI configs, or deployment configs.
+- **Display Selected Template:**
+  ```typescript
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
 
-This plan outlines the necessary steps to implement the feature, including modifications to existing services and components and the introduction of new logic for handling customizable criteria. Follow each step precisely to ensure the feature is implemented as intended.
+  return (
+      <div>
+          <h2>Plan Panel</h2>
+          {selectedTemplate ? (
+              <div>
+                  <h3>{selectedTemplate.name}</h3>
+                  <p>{selectedTemplate.description}</p>
+                  <ul>
+                      {selectedTemplate.steps.map((step, index) => (
+                          <li key={index}>{step}</li>
+                      ))}
+                  </ul>
+              </div>
+          ) : (
+              <p>No template selected.</p>
+          )}
+      </div>
+  );
+  ```
+
+### Verification:
+Run the following test file to verify the implementation:
+- `npm test __tests__/plan-templates.test.ts`
+
+### Constraints:
+- Do not modify any environment files, CI configurations, or deployment settings.
+- Limit changes to a maximum of 25 files.
