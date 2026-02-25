@@ -199,7 +199,7 @@ export function FeatureGraphView({
   const handleEditRef = useRef(handleEdit);
   handleEditRef.current = handleEdit;
   const onEditForLayout = useCallback(
-    (nodeId: string, name: string, description: string) => {
+    async (nodeId: string, name: string, description: string): Promise<void> => {
       handleEditRef.current(nodeId, name, description);
     },
     []
