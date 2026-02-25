@@ -1,101 +1,89 @@
-# Implementation Plan for Customizable Suggestion Criteria
+# Plan for Implementing API Rate Limit Notifications
+
+## Feature Name
+API Rate Limit Notifications
 
 ## Feature Description
+This feature will notify users when they are approaching or have exceeded their API rate limits. The notifications will be displayed in the `RepoInput` modal component.
 
-The feature "Customizable Suggestion Criteria" aims to allow users to define and customize criteria for generating suggestions. This flexibility allows the tool to adapt to different project needs and user preferences. The implementation involves both frontend and backend changes to facilitate the creation, application, and storage of custom criteria.
+## Source Files to Modify
 
-## Source Files to Modify or Create
+1. `frontend/src/services/api.ts`
+   - **Objective**: Implement an interceptor to monitor API response headers for rate limit information.
+   - **Modifications**:
+     - Import `axios` to use interceptors.
+     - Create a function to set up an interceptor.
+     - Extract rate limit information from response headers and trigger notifications.
 
-1. **Backend Modification:**
-   - Modify `backend/app/services/suggestion_service.py`
+```typescript
+import axios, { AxiosResponse } from 'axios';
 
-2. **Frontend Modifications:**
-   - Modify `frontend/src/components/modals/AddFeatureFlow.tsx`
-   - Modify `frontend/src/components/panels/SuggestionPanel.tsx`
+// Existing axios instance
+const api = axios.create({
+  // ... existing configuration
+});
 
-## Detailed Instructions
+// Function to set up interceptor
+export function setupRateLimitInterceptor() {
+  api.interceptors.response.use((response: AxiosResponse) => {
+    const rateLimit = response.headers['x-rate-limit-remaining'];
+    const rateLimitReset = response.headers['x-rate-limit-reset'];
+    if (rateLimit !== undefined && rateLimitReset !== undefined) {
+      const remaining = parseInt(rateLimit, 10);
+      if (remaining < 10) { // Threshold for notification
+        const resetTime = new Date(parseInt(rateLimitReset, 10) * 1000);
+        // Trigger a notification (to be implemented in RepoInput.tsx)
+        dispatchRateLimitNotification(remaining, resetTime);
+      }
+    }
+    return response;
+  }, (error) => {
+    return Promise.reject(error);
+  });
+}
 
-### 1. Backend Modifications
+// Placeholder for dispatch function
+function dispatchRateLimitNotification(remaining: number, resetTime: Date) {
+  // This function will be implemented in the RepoInput component
+}
+```
 
-#### File: `backend/app/services/suggestion_service.py`
+2. `frontend/src/components/modals/RepoInput.tsx`
+   - **Objective**: Implement a function to display notifications when the API rate limit is approaching.
+   - **Modifications**:
+     - Import necessary hooks and components for notifications.
+     - Implement the notification dispatch function.
 
-- **Import Statements**: Ensure the following import is present
-  ```python
-  from typing import List, Dict
-  ```
+```typescript
+import React, { useState, useEffect } from 'react';
+import { setupRateLimitInterceptor } from '../../services/api';
+import { Notification } from '../common/Notification';
 
-- **Modify Function:** Update or create a function in `SuggestionService` to handle custom criteria.
-  ```python
-  def generate_suggestions_with_criteria(self, criteria: Dict[str, any]) -> List[str]:
-      # Use the criteria to filter or adjust the suggestion generation logic
-      suggestions = []
-      # Example: pseudo-logic to adjust filtering
-      for suggestion in self.all_suggestions():
-          if self.meets_criteria(suggestion, criteria):
-              suggestions.append(suggestion)
-      return suggestions
+export const RepoInput: React.FC = () => {
+  const [rateLimitWarning, setRateLimitWarning] = useState<string | null>(null);
 
-  def meets_criteria(self, suggestion: str, criteria: Dict[str, any]) -> bool:
-      # Implement custom filtering logic
-      return True  # Placeholder for actual logic
-  ```
+  useEffect(() => {
+    setupRateLimitInterceptor();
+  }, []);
 
-### 2. Frontend Modifications
+  function dispatchRateLimitNotification(remaining: number, resetTime: Date) {
+    setRateLimitWarning(`Warning: Only ${remaining} requests remaining. Resets at ${resetTime.toLocaleTimeString()}.`);
+  }
 
-#### File: `frontend/src/components/modals/AddFeatureFlow.tsx`
-
-- **Modify Component:** Add a form or input fields to capture custom criteria from the user.
-  ```tsx
-  import { useState } from 'react';
-
-  const AddFeatureFlow = () => {
-      const [criteria, setCriteria] = useState({});
-
-      const handleCriteriaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-          const { name, value } = event.target;
-          setCriteria({ ...criteria, [name]: value });
-      };
-
-      return (
-          <div>
-              <input type="text" name="criterion1" onChange={handleCriteriaChange} />
-              <input type="text" name="criterion2" onChange={handleCriteriaChange} />
-          </div>
-      );
-  };
-  ```
-
-#### File: `frontend/src/components/panels/SuggestionPanel.tsx`
-
-- **Modify Component:** Update the component to use the custom criteria when fetching suggestions.
-  ```tsx
-  import { useEffect, useState } from 'react';
-  import { generateSuggestionsWithCriteria } from '../../services/api';
-
-  const SuggestionPanel = ({ criteria }) => {
-      const [suggestions, setSuggestions] = useState([]);
-
-      useEffect(() => {
-          generateSuggestionsWithCriteria(criteria).then(setSuggestions);
-      }, [criteria]);
-
-      return (
-          <div>
-              {suggestions.map((suggestion, index) => (
-                  <div key={index}>{suggestion}</div>
-              ))}
-          </div>
-      );
-  };
-  ```
+  return (
+    <div>
+      {/* Existing modal content */}
+      {rateLimitWarning && <Notification message={rateLimitWarning} />}
+    </div>
+  );
+};
+```
 
 ## Verification Step
-- Run the following test to verify the implementation:
-  ```shell
-  npm test __tests__/customizable-suggestion-criteria.test.ts
-  ```
+To verify the implementation, run the following test file:
+
+- `run jest __tests__/api-rate-limit-notifications.test.ts`
 
 ## Constraints
 - Do not modify `.env`, CI configs, or deployment configs.
-
-This plan outlines the necessary steps to implement the feature, including modifications to existing services and components and the introduction of new logic for handling customizable criteria. Follow each step precisely to ensure the feature is implemented as intended.
+- Limit changes to a maximum of 25 files.
