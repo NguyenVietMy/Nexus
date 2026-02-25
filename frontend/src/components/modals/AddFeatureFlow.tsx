@@ -58,7 +58,7 @@ export function AddFeatureFlow({ repoId = '', onClose = () => {} }: AddFeatureFl
     setError(null);
     setStep({ type: "loading-suggestion", candidateNodeId: candidate.node_id, candidateName: candidate.node_name });
     try {
-      const suggestion = await createSuggestion(repoId, candidate.node_id, description.trim(), criteria);
+      const suggestion = await createSuggestion(repoId, candidate.node_id, description.trim());
       setStep({ type: "confirm", suggestion, parentNodeId: candidate.node_id });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create suggestion");
