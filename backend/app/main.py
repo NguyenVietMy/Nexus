@@ -39,6 +39,11 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://nexus-s.net",
+        "https://www.nexus-s.net",
+        "https://nexus-kohl-three.vercel.app",
+        "https://nexus-milos-projects-bb60a924.vercel.app",
+        "https://nexus-git-main-milos-projects-bb60a924.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
